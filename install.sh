@@ -66,16 +66,29 @@ install_from_release() {
 }
 
 install_from_source() {
-  echo "No release found — installing from source with go install (requires Go 1.25+)..."
+  echo "No release found — building from source (requires git and Go 1.25+)..."
 
-  if ! command -v go >/dev/null 2>&1; then
-    echo "Error: Go is not installed. Install Go 1.25+ or wait for the first" >&2
-    echo "release and re-run this script." >&2
+  if ! command -v go >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
+    echo "Error: git and Go 1.25+ are required to build from source." >&2
+    echo "Wait for the first release and re-run this script instead." >&2
     exit 1
   fi
 
+  TMPDIR="$(mktemp -d)"
+  trap 'rm -rf "$TMPDIR"' EXIT
+
+  # A plain `go install ...@latest` does not work here: the vendored TUI
+  # forks (gocui/tcell) use relative replace directives, which the module
+  # proxy rejects. Building from a clone sidesteps that — the same way
+  # lazyclaude does it.
+  git clone --depth 1 "https://github.com/${REPO}.git" "$TMPDIR/src"
+  (
+    cd "$TMPDIR/src"
+    go build -o lazytmux ./cmd/lazytmux
+  )
+
   mkdir -p "$INSTALL_DIR"
-  GOBIN="$INSTALL_DIR" go install "github.com/${REPO}/cmd/lazytmux@latest"
+  install -m 755 "$TMPDIR/src/lazytmux" "${INSTALL_DIR}/lazytmux"
 
   echo "Installed to ${INSTALL_DIR}/lazytmux"
 }

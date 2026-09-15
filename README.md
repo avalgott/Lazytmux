@@ -38,15 +38,9 @@ A [lazygit](https://github.com/jesseduffield/lazygit)-style TUI for managing [tm
 curl -fsSL https://raw.githubusercontent.com/avalgott/Lazytmux/main/install.sh | sh
 ```
 
-Downloads the pre-built binary from the latest GitHub release to `~/.local/bin/` — no Go required. Before the first release has been cut, the script falls back to installing from source via `go install` (requires Go 1.25+). The result is the same: `lazytmux` on your PATH.
+Downloads the pre-built binary from the latest GitHub release to `~/.local/bin/` — no Go required. Before the first release has been cut, the script falls back to cloning and building from source (requires git and Go 1.25+). The result is the same: `lazytmux` on your PATH.
 
-### With `go install`
-
-```bash
-go install github.com/avalgott/Lazytmux/cmd/lazytmux@latest
-```
-
-Requires Go 1.25+. Installs to `~/go/bin` (or `$GOBIN`).
+> Note: plain `go install ...@latest` is not supported — the vendored TUI forks (gocui/tcell) use relative `replace` directives, which the Go module proxy rejects. Same tradeoff as lazyclaude.
 
 ### Build from source
 
