@@ -1,0 +1,6 @@
+bin/
+/lazytmux
+integration.test
+.env
+.DS_Store
+.reports/
