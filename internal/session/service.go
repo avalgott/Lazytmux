@@ -14,7 +14,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"lazytmux/internal/core/tmux"
+	"github.com/avalgott/Lazytmux/internal/core/tmux"
 )
 
 // Info is a read-only view of a tmux session for display.

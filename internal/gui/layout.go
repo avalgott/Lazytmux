@@ -7,7 +7,7 @@ import (
 
 	"github.com/jesseduffield/gocui"
 
-	"lazytmux/internal/gui/presentation"
+	"github.com/avalgott/Lazytmux/internal/gui/presentation"
 )
 
 // roundedFrame is the set of runes for rounded border corners.

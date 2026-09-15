@@ -1,4 +1,4 @@
-module lazytmux
+module github.com/avalgott/Lazytmux
 
 go 1.25.0
 

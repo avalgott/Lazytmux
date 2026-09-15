@@ -13,7 +13,7 @@ import (
 
 	"github.com/jesseduffield/gocui"
 
-	"lazytmux/internal/session"
+	"github.com/avalgott/Lazytmux/internal/session"
 )
 
 // isUnknownView checks for gocui's ErrUnknownView.

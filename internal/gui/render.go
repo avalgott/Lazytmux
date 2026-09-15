@@ -6,8 +6,8 @@ import (
 
 	"github.com/jesseduffield/gocui"
 
-	"lazytmux/internal/gui/presentation"
-	"lazytmux/internal/session"
+	"github.com/avalgott/Lazytmux/internal/gui/presentation"
+	"github.com/avalgott/Lazytmux/internal/session"
 )
 
 // renderSessions draws the session list. The selected row is highlighted by

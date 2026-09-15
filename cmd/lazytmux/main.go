@@ -11,9 +11,9 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
-	"lazytmux/internal/core/tmux"
-	"lazytmux/internal/gui"
-	"lazytmux/internal/session"
+	"github.com/avalgott/Lazytmux/internal/core/tmux"
+	"github.com/avalgott/Lazytmux/internal/gui"
+	"github.com/avalgott/Lazytmux/internal/session"
 )
 
 var (

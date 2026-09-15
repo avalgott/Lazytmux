@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"lazytmux/internal/session"
+	"github.com/avalgott/Lazytmux/internal/session"
 )
 
 // fakeProvider implements session.Provider for tests. Mutations are recorded

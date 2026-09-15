@@ -30,19 +30,35 @@ A [lazygit](https://github.com/jesseduffield/lazygit)-style TUI for managing [tm
 - tmux (any modern 3.x), installed and on `PATH`
 - Go 1.25+ (build only)
 
-## Build & Install
+## Installation
+
+### Quick install (standalone binary)
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/avalgott/Lazytmux/main/install.sh | sh
+```
+
+Downloads the pre-built binary from the latest GitHub release to `~/.local/bin/` — no Go required. Before the first release has been cut, the script falls back to installing from source via `go install` (requires Go 1.25+). The result is the same: `lazytmux` on your PATH.
+
+### With `go install`
+
+```bash
+go install github.com/avalgott/Lazytmux/cmd/lazytmux@latest
+```
+
+Requires Go 1.25+. Installs to `~/go/bin` (or `$GOBIN`).
+
+### Build from source
+
+```bash
+git clone git@github.com:avalgott/Lazytmux.git
+cd Lazytmux
 make build                     # -> bin/lazytmux
 make install PREFIX=~/.local   # -> ~/.local/bin/lazytmux
 make test                      # go test -race -cover ./...
 ```
 
-Without the Makefile:
-
-```bash
-go build -o bin/lazytmux ./cmd/lazytmux
-```
+Releases are built automatically from `v*` tags via GoReleaser (see `.github/workflows/release.yml`).
 
 ## Usage
 

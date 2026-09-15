@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"lazytmux/internal/core/shell"
+	"github.com/avalgott/Lazytmux/internal/core/shell"
 )
 
 func TestQuote_Simple(t *testing.T) {

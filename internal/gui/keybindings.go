@@ -7,7 +7,7 @@ import (
 
 	"github.com/jesseduffield/gocui"
 
-	"lazytmux/internal/session"
+	"github.com/avalgott/Lazytmux/internal/session"
 )
 
 // setupKeybindings registers all keybindings.
