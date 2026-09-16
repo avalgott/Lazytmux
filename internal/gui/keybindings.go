@@ -264,7 +264,6 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 		}
 		if a.scroll.IsActive() {
 			a.scroll.Page(delta)
-			a.updateScrollViewport()
 			a.g.Update(func(*gocui.Gui) error { return nil })
 			return nil
 		}
@@ -284,7 +283,6 @@ func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 			a.enterScrollMode()
 		}
 		a.scroll.Move(delta)
-		a.updateScrollViewport()
 		a.g.Update(func(*gocui.Gui) error { return nil })
 		return nil
 	}

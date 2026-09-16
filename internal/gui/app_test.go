@@ -539,27 +539,34 @@ func TestApplySessionRefreshClearsStaleList(t *testing.T) {
 
 func TestScrollStateNavigation(t *testing.T) {
 	ss := &ScrollState{}
-	ss.Enter(100, 20, 20, 80) // 100 history lines + 20 visible, 20-line viewport
+	ss.Enter(20, 80) // 20-line viewport
+	// Simulate the snapshot load: 40 lines total.
+	ss.lines = make([]string, 40)
+	for i := range ss.lines {
+		ss.lines[i] = fmt.Sprintf("line-%02d", i)
+	}
+	ss.total = 40
+	ss.loaded = true
 
-	// Enter starts at the live view: offset 0, range [0, 19].
+	// Enter starts at the live view: the viewport shows the last 20 lines.
 	assert.Equal(t, 0, ss.offsetFromBottom)
-	start, end := ss.rangeFor()
-	assert.Equal(t, 0, start)
-	assert.Equal(t, 19, end)
+	vp := ss.viewport()
+	assert.Len(t, vp, 20)
+	assert.Equal(t, "line-20", vp[0])
+	assert.Equal(t, "line-39", vp[19])
 
-	// Scrolling up moves into the history: offset 5 -> [-5, 14].
+	// Scrolling up by 5 shows lines 15-34.
 	ss.Move(-5)
-	start, end = ss.rangeFor()
-	assert.Equal(t, -5, start)
-	assert.Equal(t, 14, end)
+	vp = ss.viewport()
+	assert.Equal(t, "line-15", vp[0])
+	assert.Equal(t, "line-34", vp[19])
 
 	// Top = oldest line; over-scrolling clamps.
 	ss.Top()
-	assert.Equal(t, 100, ss.offsetFromBottom)
-	start, _ = ss.rangeFor()
-	assert.Equal(t, -100, start)
+	assert.Equal(t, 20, ss.offsetFromBottom)
+	assert.Equal(t, "line-00", ss.viewport()[0])
 	ss.Move(-1)
-	assert.Equal(t, 100, ss.offsetFromBottom, "cannot scroll above the oldest line")
+	assert.Equal(t, 20, ss.offsetFromBottom, "cannot scroll above the oldest line")
 
 	// Bottom returns to the live view; Page moves half a viewport.
 	ss.Bottom()
@@ -567,13 +574,10 @@ func TestScrollStateNavigation(t *testing.T) {
 	ss.Page(-1)
 	assert.Equal(t, 10, ss.offsetFromBottom, "page = half the viewport")
 
-	// New output while browsing grows the history but the offset from the
-	// live view keeps the same lines in view: the capture range slides down
-	// by exactly the history delta.
-	ss.Enter(130, 20, 20, 80)
-	ss.Move(-5)
-	_, end = ss.rangeFor()
-	assert.Equal(t, 14, end, "offset is anchored to the live view, not the history start")
+	// The snapshot is frozen: pane-side history changes never alter the
+	// viewport (which is exactly why the snapshot exists).
+	assert.Equal(t, "line-10", ss.viewport()[0])
+	assert.Equal(t, "line-10", ss.viewport()[0], "viewport is stable under pane output")
 }
 
 func TestScrollModeKeyHandling(t *testing.T) {
@@ -616,7 +620,7 @@ func TestScrollModeCtrlKeysDoNotForward(t *testing.T) {
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
-	app.scroll.Enter(50, 20, 20, 80)
+	app.scroll.Enter(20, 80)
 	assert.True(t, app.scroll.IsActive())
 
 	// Ctrl+O must not send EOF to the pane while browsing.
@@ -646,6 +650,16 @@ func TestScrollModeWheelAndToggle(t *testing.T) {
 	require.NoError(t, app.layout(app.g))
 	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
 	assert.True(t, app.scroll.IsActive())
+
+	// Simulate the snapshot load (headless mode never runs gui.Update).
+	app.scroll.lines = make([]string, 50)
+	for i := range app.scroll.lines {
+		app.scroll.lines[i] = fmt.Sprintf("line-%02d", i)
+	}
+	app.scroll.total = 50
+	app.scroll.loaded = true
+
+	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
 	assert.Equal(t, 3, app.scroll.offsetFromBottom)
 
 	// Ctrl+V toggles it off.
@@ -654,7 +668,7 @@ func TestScrollModeWheelAndToggle(t *testing.T) {
 
 	// Exiting fullscreen also exits scroll mode.
 	app.fullscreen.Enter("devbox")
-	app.scroll.Enter(10, 10, 5, 80)
+	app.scroll.Enter(5, 80)
 	assert.True(t, app.scroll.IsActive())
 	app.exitFullScreen()
 	assert.False(t, app.scroll.IsActive())

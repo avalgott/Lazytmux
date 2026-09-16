@@ -133,12 +133,11 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 		if err != nil {
 			return fmt.Errorf("write command script: %w", err)
 		}
-		// The path is always created directly under /tmp (never os.TempDir,
-		// which honors TMPDIR and could introduce spaces or metacharacters),
-		// so it is safe inside the single-quoted wrapper — same trick as
-		// lazyclaude's launcher scripts. The keyword to run the script is
-		// chosen per shell: fish uses `source`, POSIX shells use `.`.
-		command = fmt.Sprintf(`exec "$SHELL" -lic '%s %s; exec "$SHELL"'`, shellSourceKeyword(), script)
+		command, err = buildShellWrapper(script)
+		if err != nil {
+			_ = os.Remove(script)
+			return err
+		}
 	}
 
 	err := s.tmux.NewSession(ctx, tmux.NewSessionOpts{
@@ -158,14 +157,33 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 	return nil
 }
 
-// shellSourceKeyword returns the keyword the user's shell uses to run a
-// script in the current process: fish uses `source`, POSIX shells use `.`.
-// The wrapper itself is executed by "$SHELL", so both must agree.
-func shellSourceKeyword() string {
-	if filepath.Base(os.Getenv("SHELL")) == "fish" {
-		return "source"
+// buildShellWrapper returns the tmux command that runs the user's command
+// inside their interactive shell, or an error for shells we cannot wrap
+// correctly. Every shell the wrapper supports gets a template that actually
+// works in it; the rest are rejected explicitly rather than running a
+// silently broken command. The path is always created directly under /tmp
+// (never os.TempDir, which honors TMPDIR and could introduce spaces or
+// metacharacters), so it is safe inside the single-quoted wrapper — same
+// trick as lazyclaude's launcher scripts.
+func buildShellWrapper(script string) (string, error) {
+	name := filepath.Base(os.Getenv("SHELL"))
+	if name == "" || name == "." {
+		// SHELL unset: the wrapper falls back to /bin/sh at runtime.
+		name = "sh"
 	}
-	return "."
+	source := "."
+	switch name {
+	case "sh", "bash", "dash", "ksh", "zsh":
+		source = "."
+	case "fish":
+		source = "source"
+	case "csh", "tcsh":
+		return "", fmt.Errorf("shell %q is not supported for command sessions — use an empty command or a POSIX shell", name)
+	default:
+		return "", fmt.Errorf("unknown shell %q — command sessions support sh, bash, dash, ksh, zsh, and fish", name)
+	}
+	// ${SHELL:-/bin/sh} guards against SHELL being unset in the pane.
+	return fmt.Sprintf(`exec "${SHELL:-/bin/sh}" -lic '%s %s; exec "${SHELL:-/bin/sh}"'`, source, script), nil
 }
 
 // writeCommandScript writes the user's command to a temp file whose first

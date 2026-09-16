@@ -146,7 +146,7 @@ func (e *inputEditor) scrollEdit(key gocui.Key, ch rune) bool {
 	default:
 		return false
 	}
-	app.updateScrollViewport()
+	// Scrolling slices the in-memory snapshot; only a redraw is needed.
 	// Redraw immediately so the status bar position updates without waiting
 	// for the async fetch.
 	app.g.Update(func(*gocui.Gui) error { return nil })
