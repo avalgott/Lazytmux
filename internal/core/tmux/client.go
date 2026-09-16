@@ -64,6 +64,12 @@ type Client interface {
 	// pane's live geometry even when it is being resized concurrently.
 	CapturePaneANSIFrom(ctx context.Context, target string, start int) (string, error)
 
+	// CapturePaneANSIHistory captures the whole pane history from tmux's
+	// oldest-history sentinel ("-S -") to the current bottom in one
+	// operation. Both bounds are resolved atomically by tmux, so a pane
+	// that scrolls concurrently cannot produce a partial snapshot.
+	CapturePaneANSIHistory(ctx context.Context, target string) (string, error)
+
 	// SendKeys sends key sequences to a tmux target.
 	// Keys are interpreted as tmux key names (e.g., "Enter", "Space").
 	SendKeys(ctx context.Context, target string, keys ...string) error

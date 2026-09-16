@@ -73,20 +73,17 @@ func (f *fakeProvider) Capture(_ context.Context, _ string, _, _ int) (session.P
 	return f.captured, f.err
 }
 
-func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string, start int) (session.Preview, error) {
+func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string) (session.Preview, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	end := start + f.history + f.paneHeight - 1
+	start := -f.history
+	end := f.paneHeight - 1
 	f.scrollRanges = append(f.scrollRanges, scrollRange{start, end})
 	var sb strings.Builder
 	for i := start; i <= end; i++ {
 		fmt.Fprintf(&sb, "line %d\n", i)
 	}
 	return session.Preview{Content: sb.String()}, f.err
-}
-
-func (f *fakeProvider) HistorySize(_ context.Context, _ string) (int, error) {
-	return f.history, f.err
 }
 
 func (f *fakeProvider) SendKeys(_ context.Context, name string, keys ...string) error {

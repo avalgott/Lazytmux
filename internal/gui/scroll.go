@@ -51,6 +51,7 @@ func (ss *ScrollState) Enter(viewH, width int) {
 	ss.lines = nil
 	ss.total = 0
 	ss.loaded = false
+	ss.pendingTop = false
 }
 
 // Exit deactivates scroll mode and invalidates any in-flight snapshot load.
@@ -171,20 +172,12 @@ func (a *App) enterScrollMode() {
 	}
 	a.scroll.Enter(viewH, width)
 
-	// Load the snapshot in a goroutine: the tmux query and the capture both
-	// run outside the event loop, and only the latest load applies.
+	// Load the snapshot in a goroutine: the single atomic tmux capture runs
+	// outside the event loop, and only the latest load applies.
 	a.scroll.seq++
 	seq := a.scroll.seq
 	go func() {
-		history, err := a.svc.HistorySize(context.Background(), target)
-		if err != nil {
-			a.finishScrollLoad(seq, nil, err)
-			return
-		}
-		// Capture from -history to tmux's current bottom sentinel (no -E):
-		// the snapshot always ends at the live bottom, even while the
-		// fullscreen resize runs concurrently.
-		lines, err := fetchScrollbackLines(a.svc, target, width, -history)
+		lines, err := fetchScrollbackLines(a.svc, target, width)
 		if err != nil {
 			a.finishScrollLoad(seq, nil, err)
 			return
@@ -236,11 +229,12 @@ func (a *App) exitScrollMode() {
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }
 
-// fetchScrollbackLines captures the pane history from start to the current
-// bottom and truncates lines to the given width. Pure helper: no App state
-// is touched, so it is safe to run from a goroutine.
-func fetchScrollbackLines(svc session.Provider, target string, width, start int) ([]string, error) {
-	preview, err := svc.CaptureScrollback(context.Background(), target, start)
+// fetchScrollbackLines captures the whole pane history (one atomic tmux
+// operation, oldest sentinel to current bottom) and truncates lines to the
+// given width. Pure helper: no App state is touched, so it is safe to run
+// from a goroutine.
+func fetchScrollbackLines(svc session.Provider, target string, width int) ([]string, error) {
+	preview, err := svc.CaptureScrollback(context.Background(), target)
 	if err != nil {
 		return nil, err
 	}

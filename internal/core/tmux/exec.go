@@ -392,6 +392,12 @@ func (c *ExecClient) CapturePaneANSIFrom(ctx context.Context, target string, sta
 		"-S", strconv.Itoa(start))
 }
 
+// CapturePaneANSIHistory captures from the oldest history line to the
+// current bottom in one operation ("-" is tmux's start-of-history sentinel).
+func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) (string, error) {
+	return c.runRaw(ctx, "capture-pane", "-t", target, "-ep", "-S", "-")
+}
+
 func (c *ExecClient) SendKeys(ctx context.Context, target string, keys ...string) error {
 	args := append([]string{"send-keys", "-t", target}, keys...)
 	_, err := c.run(ctx, args...)

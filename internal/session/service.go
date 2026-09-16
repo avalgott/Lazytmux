@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -48,14 +47,10 @@ type Provider interface {
 	Kill(ctx context.Context, name string) error
 	Rename(ctx context.Context, name, newName string) error
 	Capture(ctx context.Context, name string, width, height int) (Preview, error)
-	// CaptureScrollback captures the session's pane history from a start
-	// offset to the pane's current bottom (tmux -S without -E), with ANSI
-	// escape codes. start is a capture-pane line offset: 0 is the top of the
-	// visible screen, negative values count back into the scrollback.
-	CaptureScrollback(ctx context.Context, name string, start int) (Preview, error)
-	// HistorySize returns the number of lines in the pane's scrollback
-	// history (the visible screen excluded).
-	HistorySize(ctx context.Context, name string) (int, error)
+	// CaptureScrollback captures the session's whole pane history — from
+	// tmux's oldest-history sentinel to the current bottom — in one atomic
+	// tmux operation, with ANSI escape codes.
+	CaptureScrollback(ctx context.Context, name string) (Preview, error)
 	// SendKeys sends tmux key names (e.g. "Enter", "Up", "C-c") to the
 	// session's active pane. Used by fullscreen passthrough mode.
 	SendKeys(ctx context.Context, name string, keys ...string) error
@@ -261,24 +256,14 @@ func (s *Service) Capture(ctx context.Context, name string, width, height int) (
 	}, nil
 }
 
-// CaptureScrollback captures the session's pane history from start to the
-// pane's current bottom.
-func (s *Service) CaptureScrollback(ctx context.Context, name string, start int) (Preview, error) {
-	content, err := s.tmux.CapturePaneANSIFrom(ctx, name, start)
+// CaptureScrollback captures the session's whole pane history in one
+// atomic tmux operation.
+func (s *Service) CaptureScrollback(ctx context.Context, name string) (Preview, error) {
+	content, err := s.tmux.CapturePaneANSIHistory(ctx, name)
 	if err != nil {
 		return Preview{}, err
 	}
 	return Preview{Content: content}, nil
-}
-
-// HistorySize returns the number of scrollback lines in the session's pane.
-func (s *Service) HistorySize(ctx context.Context, name string) (int, error) {
-	out, err := s.tmux.ShowMessage(ctx, name, "#{history_size}")
-	if err != nil {
-		return 0, err
-	}
-	n, _ := strconv.Atoi(strings.TrimSpace(out))
-	return n, nil
 }
 
 // SendKeys sends tmux key names to the session's active pane.

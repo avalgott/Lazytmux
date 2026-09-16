@@ -110,6 +110,11 @@ func TestServiceCreateRejectsUnsupportedShell(t *testing.T) {
 	mock := tmux.NewMockClient()
 	svc := NewService(mock)
 
+	// Snapshot the matching file set before the call, so unrelated
+	// concurrently-running instances cannot make the cleanup check flaky.
+	before, globErr := filepath.Glob("/tmp/lazytmux-cmd-*")
+	require.NoError(t, globErr)
+
 	t.Setenv("SHELL", "/bin/csh")
 	err := svc.Create(context.Background(), CreateOpts{Name: "x", Command: "top"})
 	require.Error(t, err)
@@ -117,9 +122,9 @@ func TestServiceCreateRejectsUnsupportedShell(t *testing.T) {
 
 	// No session was created and the temp script was cleaned up.
 	assert.Empty(t, mock.Infos)
-	matches, globErr := filepath.Glob("/tmp/lazytmux-cmd-*")
+	after, globErr := filepath.Glob("/tmp/lazytmux-cmd-*")
 	require.NoError(t, globErr)
-	assert.Empty(t, matches)
+	assert.Equal(t, before, after, "the rejected shell must not leave scripts behind")
 }
 
 func TestServiceCreateIgnoresTMPDIR(t *testing.T) {
@@ -147,13 +152,18 @@ func TestServiceCreateCleansUpScriptOnFailure(t *testing.T) {
 	mock.ErrNewSession = assert.AnError
 	svc := NewService(mock)
 
+	// Snapshot the matching file set before the call, so unrelated
+	// concurrently-running instances cannot make the cleanup check flaky.
+	before, globErr := filepath.Glob("/tmp/lazytmux-cmd-*")
+	require.NoError(t, globErr)
+
 	err := svc.Create(context.Background(), CreateOpts{Name: "x", Command: "top"})
 	assert.ErrorIs(t, err, assert.AnError)
 
 	// The temp script must be removed when the session could not be created.
-	matches, err := filepath.Glob("/tmp/lazytmux-cmd-*")
-	require.NoError(t, err)
-	assert.Empty(t, matches, "no leftover command scripts")
+	after, globErr := filepath.Glob("/tmp/lazytmux-cmd-*")
+	require.NoError(t, globErr)
+	assert.Equal(t, before, after, "no leftover command scripts")
 }
 
 func TestServiceCreateShellSession(t *testing.T) {

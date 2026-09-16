@@ -244,6 +244,16 @@ func (m *MockClient) CapturePaneANSIFrom(_ context.Context, target string, start
 	return m.Captured[target], nil
 }
 
+func (m *MockClient) CapturePaneANSIHistory(_ context.Context, target string) (string, error) {
+	if m.ErrCapture != nil {
+		return "", m.ErrCapture
+	}
+	if content, ok := m.RangeCaptures[target+":hist"]; ok {
+		return content, nil
+	}
+	return m.Captured[target], nil
+}
+
 func (m *MockClient) SendKeys(_ context.Context, target string, keys ...string) error {
 	if m.ErrSendKeys != nil {
 		return m.ErrSendKeys
