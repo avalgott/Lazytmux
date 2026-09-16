@@ -539,26 +539,41 @@ func TestApplySessionRefreshClearsStaleList(t *testing.T) {
 
 func TestScrollStateNavigation(t *testing.T) {
 	ss := &ScrollState{}
-	ss.Enter(100, 40, 20, 80) // 100 history lines + 40 visible, 20-line viewport
+	ss.Enter(100, 20, 20, 80) // 100 history lines + 20 visible, 20-line viewport
 
-	// Enter starts at the bottom (live view): pos = 140-20 = 120,
-	// capture range = [120-100, 120-100+19] = [20, 39].
-	assert.Equal(t, 120, ss.pos)
-	fetch := func(start, end int) ([]string, error) {
-		return []string{fmt.Sprintf("%d-%d", start, end)}, nil
-	}
-	assert.True(t, ss.setPos(120, fetch))
+	// Enter starts at the live view: offset 0, range [0, 19].
+	assert.Equal(t, 0, ss.offsetFromBottom)
+	start, end := ss.rangeFor()
+	assert.Equal(t, 0, start)
+	assert.Equal(t, 19, end)
 
-	ss.Move(-5, fetch)
-	assert.Equal(t, 115, ss.pos)
-	ss.Top(fetch)
-	assert.Equal(t, 0, ss.pos)
-	ss.Move(-1, fetch)
-	assert.Equal(t, 0, ss.pos, "cannot scroll above the oldest line")
-	ss.Bottom(fetch)
-	assert.Equal(t, 120, ss.pos)
-	ss.Page(-1, fetch)
-	assert.Equal(t, 110, ss.pos, "page = half the viewport")
+	// Scrolling up moves into the history: offset 5 -> [-5, 14].
+	ss.Move(-5)
+	start, end = ss.rangeFor()
+	assert.Equal(t, -5, start)
+	assert.Equal(t, 14, end)
+
+	// Top = oldest line; over-scrolling clamps.
+	ss.Top()
+	assert.Equal(t, 100, ss.offsetFromBottom)
+	start, _ = ss.rangeFor()
+	assert.Equal(t, -100, start)
+	ss.Move(-1)
+	assert.Equal(t, 100, ss.offsetFromBottom, "cannot scroll above the oldest line")
+
+	// Bottom returns to the live view; Page moves half a viewport.
+	ss.Bottom()
+	assert.Equal(t, 0, ss.offsetFromBottom)
+	ss.Page(-1)
+	assert.Equal(t, 10, ss.offsetFromBottom, "page = half the viewport")
+
+	// New output while browsing grows the history but the offset from the
+	// live view keeps the same lines in view: the capture range slides down
+	// by exactly the history delta.
+	ss.Enter(130, 20, 20, 80)
+	ss.Move(-5)
+	_, end = ss.rangeFor()
+	assert.Equal(t, 14, end, "offset is anchored to the live view, not the history start")
 }
 
 func TestScrollModeKeyHandling(t *testing.T) {
@@ -579,6 +594,13 @@ func TestScrollModeKeyHandling(t *testing.T) {
 	p.mu.Unlock()
 	assert.Empty(t, literals, "keys must not be forwarded in scroll mode")
 
+	// The async viewport fetch lands eventually (the fake captures ranges).
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.scrollRanges) > 0
+	}, time.Second, 5*time.Millisecond)
+
 	// Esc exits scroll mode and returns to live forwarding.
 	assert.True(t, editor.Edit(nil, gocui.KeyEsc, 0, 0))
 	assert.False(t, app.scroll.IsActive())
@@ -587,6 +609,27 @@ func TestScrollModeKeyHandling(t *testing.T) {
 	literals = p.literals["devbox"]
 	p.mu.Unlock()
 	assert.Equal(t, "x", literals)
+}
+
+func TestScrollModeCtrlKeysDoNotForward(t *testing.T) {
+	p := &fakeProvider{history: 50}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	app.scroll.Enter(50, 20, 20, 80)
+	assert.True(t, app.scroll.IsActive())
+
+	// Ctrl+O must not send EOF to the pane while browsing.
+	require.NoError(t, app.forwardEOFHandler(app.g, nil))
+
+	// Ctrl+C exits scroll mode (like Esc) instead of interrupting the pane.
+	require.NoError(t, app.ctrlCHandler(app.g, nil))
+	assert.False(t, app.scroll.IsActive())
+
+	p.mu.Lock()
+	keys := append([]string(nil), p.keys["devbox"]...)
+	p.mu.Unlock()
+	assert.Empty(t, keys, "nothing may be forwarded to the pane in scroll mode")
 }
 
 func TestScrollModeWheelAndToggle(t *testing.T) {
@@ -603,6 +646,7 @@ func TestScrollModeWheelAndToggle(t *testing.T) {
 	require.NoError(t, app.layout(app.g))
 	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
 	assert.True(t, app.scroll.IsActive())
+	assert.Equal(t, 3, app.scroll.offsetFromBottom)
 
 	// Ctrl+V toggles it off.
 	require.NoError(t, app.toggleScrollHandler(app.g, nil))

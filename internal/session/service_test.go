@@ -71,11 +71,13 @@ func TestServiceCreate(t *testing.T) {
 
 	// The command runs inside an interactive shell wrapper so Ctrl+C cannot
 	// kill the pane (and with it the session). The user's command lives in a
-	// self-deleting temp script.
-	assert.Contains(t, opts.Command, `exec "$SHELL" -lic 'source /tmp/lazytmux-cmd-`)
+	// self-deleting temp script under /tmp.
+	assert.Contains(t, opts.Command, `exec "$SHELL" -lic '. /tmp/lazytmux-cmd-`)
 	assert.Contains(t, opts.Command, `; exec "$SHELL"'`)
 
-	script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic 'source `), `; exec "$SHELL"'`)
+	script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic '. `), `; exec "$SHELL"'`)
+	assert.True(t, strings.HasPrefix(script, "/tmp/lazytmux-cmd-"), "script must live directly under /tmp, not TMPDIR")
+
 	// The mock never runs the session, so the script's self-delete line never
 	// fires — remove it at test end.
 	t.Cleanup(func() { _ = os.Remove(script) })
@@ -84,6 +86,41 @@ func TestServiceCreate(t *testing.T) {
 	require.NoError(t, err, "temp script should exist")
 	assert.Contains(t, string(data), "rm -f '"+script+"'", "script should self-delete")
 	assert.Contains(t, string(data), "\nssh devbox\n")
+}
+
+func TestServiceCreateUsesFishSourceKeyword(t *testing.T) {
+	mock := tmux.NewMockClient()
+	svc := NewService(mock)
+
+	t.Setenv("SHELL", "/usr/bin/fish")
+	err := svc.Create(context.Background(), CreateOpts{Name: "x", Command: "top"})
+	require.NoError(t, err)
+
+	opts := mock.LastNewSessionOpts
+	assert.Contains(t, opts.Command, `-lic 'source /tmp/lazytmux-cmd-`, "fish uses `source`, not `.`")
+	t.Cleanup(func() {
+		script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic 'source `), `; exec "$SHELL"'`)
+		_ = os.Remove(script)
+	})
+}
+
+func TestServiceCreateIgnoresTMPDIR(t *testing.T) {
+	mock := tmux.NewMockClient()
+	svc := NewService(mock)
+
+	// A hostile TMPDIR must not affect the wrapper (the script always goes
+	// to /tmp, and the path is interpolated unquoted into single quotes).
+	t.Setenv("TMPDIR", "/tmp with spaces; rm -rf")
+	err := svc.Create(context.Background(), CreateOpts{Name: "x", Command: "top"})
+	require.NoError(t, err)
+
+	opts := mock.LastNewSessionOpts
+	assert.Contains(t, opts.Command, ". /tmp/lazytmux-cmd-")
+	assert.NotContains(t, opts.Command, "with spaces")
+	t.Cleanup(func() {
+		script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic '. `), `; exec "$SHELL"'`)
+		_ = os.Remove(script)
+	})
 }
 
 func TestServiceCreateCleansUpScriptOnFailure(t *testing.T) {

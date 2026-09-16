@@ -212,8 +212,10 @@ func (a *App) exitFullScreenHandler(g *gocui.Gui, v *gocui.View) error {
 
 // forwardEOFHandler sends a literal Ctrl+D to the pane (Ctrl+O) so shells and
 // REPLs can still receive EOF while Ctrl+D is reserved for leaving fullscreen.
+// A no-op while scroll mode is active: nothing may be forwarded to the pane
+// while browsing its history.
 func (a *App) forwardEOFHandler(g *gocui.Gui, v *gocui.View) error {
-	if !a.fullscreen.IsActive() {
+	if !a.fullscreen.IsActive() || a.scroll.IsActive() {
 		return nil
 	}
 	a.forwardTmuxKey("C-d")
@@ -222,9 +224,15 @@ func (a *App) forwardEOFHandler(g *gocui.Gui, v *gocui.View) error {
 
 // ctrlCHandler intercepts Ctrl+C: in fullscreen mode it is forwarded to the
 // pane (so the pane's program receives SIGINT); on the dashboard it quits.
+// While browsing the history it exits scroll mode back to the live view
+// (same as Esc) instead of forwarding.
 func (a *App) ctrlCHandler(g *gocui.Gui, v *gocui.View) error {
 	if !a.fullscreen.IsActive() {
 		return a.quit(g, v)
+	}
+	if a.scroll.IsActive() {
+		a.exitScrollMode()
+		return nil
 	}
 	a.forwardTmuxKey("C-c")
 	return nil
@@ -255,7 +263,8 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 			return nil
 		}
 		if a.scroll.IsActive() {
-			a.scroll.Page(delta, a.fetchScrollback)
+			a.scroll.Page(delta)
+			a.updateScrollViewport()
 			a.g.Update(func(*gocui.Gui) error { return nil })
 			return nil
 		}
@@ -274,7 +283,8 @@ func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 		if !a.scroll.IsActive() {
 			a.enterScrollMode()
 		}
-		a.scroll.Move(delta, a.fetchScrollback)
+		a.scroll.Move(delta)
+		a.updateScrollViewport()
 		a.g.Update(func(*gocui.Gui) error { return nil })
 		return nil
 	}

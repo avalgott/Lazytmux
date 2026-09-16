@@ -9,41 +9,44 @@ import (
 	"github.com/jesseduffield/gocui"
 
 	"github.com/avalgott/Lazytmux/internal/gui/presentation"
+	"github.com/avalgott/Lazytmux/internal/session"
 )
 
 // ScrollState tracks scrollback browsing in fullscreen mode. Adapted from
 // lazyclaude's scroll mode: the live preview is replaced by a window over the
 // pane's scrollback history, moved with vim-like keys or the mouse wheel.
 //
-// Coordinates: the pane's lines are numbered from -history (oldest scrollback
-// line) to visibleRows-1 (bottom of the visible screen); capture-pane -S/-E
-// use exactly these offsets. The state keeps pos as a 0-based index from the
-// oldest line, so capture start = pos - history.
+// The viewport position is stored as an offset from the live view (0 = the
+// current screen), so output produced while browsing — which appends to, and
+// eventually evicts from, the history — does not move the visible lines. The
+// history size is re-queried before every fetch for the same reason; the
+// coordinates are then translated into capture-pane -S/-E offsets (0 is the
+// top of the visible screen, negative values count back into the history).
 type ScrollState struct {
-	active  bool
-	history int      // scrollback lines (capture-pane negative side)
-	visible int      // visible screen rows of the pane
-	pos     int      // first line of the viewport, 0-based from the oldest line
-	viewH   int      // viewport height
-	lines   []string // last captured viewport content
-	width   int      // viewport width (for truncation)
+	active           bool
+	history          int      // scrollback lines (refreshed before each fetch)
+	visible          int      // pane rows the viewport covers
+	viewH            int      // viewport height
+	width            int      // viewport width (for truncation)
+	offsetFromBottom int      // 0 = live view; grows when scrolling up
+	lines            []string // last applied viewport content
+	seq              int64
 }
 
-// Enter activates scroll mode. total is history + visible rows.
+// Enter activates scroll mode at the live view.
 func (ss *ScrollState) Enter(history, visible, viewH, width int) {
 	ss.active = true
 	ss.history = history
 	ss.visible = visible
 	ss.viewH = viewH
 	ss.width = width
-	if viewH < 1 {
-		viewH = 1
+	if ss.viewH < 1 {
+		ss.viewH = 1
 	}
-	// Start at the bottom: the live screen.
-	ss.pos = ss.total() - ss.viewH
-	if ss.pos < 0 {
-		ss.pos = 0
+	if ss.width < 1 {
+		ss.width = 1
 	}
+	ss.offsetFromBottom = 0
 	ss.lines = nil
 }
 
@@ -63,53 +66,54 @@ func (ss *ScrollState) total() int {
 	return ss.history + ss.visible
 }
 
-// maxPos is the lowest legal pos (bottom viewport).
-func (ss *ScrollState) maxPos() int {
-	maxPos := ss.total() - ss.viewH
-	if maxPos < 0 {
+// maxOffset is the offset of the oldest viewport (top of the history).
+func (ss *ScrollState) maxOffset() int {
+	m := ss.total() - ss.viewH
+	if m < 0 {
 		return 0
 	}
-	return maxPos
+	return m
 }
 
-// setPos clamps pos and updates the viewport lines from the pane history.
-// Returns false when the fetch fails (state left unchanged).
-func (ss *ScrollState) setPos(pos int, fetch func(start, end int) ([]string, error)) bool {
-	if pos < 0 {
-		pos = 0
+func (ss *ScrollState) clampOffset() {
+	if ss.offsetFromBottom < 0 {
+		ss.offsetFromBottom = 0
 	}
-	if maxPos := ss.maxPos(); pos > maxPos {
-		pos = maxPos
+	if max := ss.maxOffset(); ss.offsetFromBottom > max {
+		ss.offsetFromBottom = max
 	}
-	start := pos - ss.history
-	end := start + ss.viewH - 1
-	lines, err := fetch(start, end)
-	if err != nil {
-		return false
-	}
-	ss.pos = pos
-	ss.lines = lines
-	return true
 }
 
-// Move scrolls by delta lines.
-func (ss *ScrollState) Move(delta int, fetch func(start, end int) ([]string, error)) {
-	ss.setPos(ss.pos+delta, fetch)
+// Move scrolls by delta lines (positive = towards newer content).
+func (ss *ScrollState) Move(delta int) {
+	ss.offsetFromBottom -= delta
+	ss.clampOffset()
 }
 
 // Page scrolls by roughly half a viewport.
-func (ss *ScrollState) Page(delta int, fetch func(start, end int) ([]string, error)) {
-	ss.setPos(ss.pos+delta*(ss.viewH/2), fetch)
+func (ss *ScrollState) Page(delta int) {
+	ss.offsetFromBottom -= delta * (ss.viewH / 2)
+	ss.clampOffset()
 }
 
-// Top jumps to the oldest line; Bottom to the live screen.
-func (ss *ScrollState) Top(fetch func(start, end int) ([]string, error)) {
-	ss.setPos(0, fetch)
+// Top jumps to the oldest line; Bottom to the live view.
+func (ss *ScrollState) Top() { ss.offsetFromBottom = ss.maxOffset() }
+
+// Bottom jumps to the live view.
+func (ss *ScrollState) Bottom() { ss.offsetFromBottom = 0 }
+
+// rangeFor translates the current position into capture-pane -S/-E offsets.
+func (ss *ScrollState) rangeFor() (start, end int) {
+	pos := ss.total() - ss.viewH - ss.offsetFromBottom
+	start = pos - ss.history
+	end = start + ss.viewH - 1
+	return start, end
 }
 
-// Bottom jumps to the live screen.
-func (ss *ScrollState) Bottom(fetch func(start, end int) ([]string, error)) {
-	ss.setPos(ss.maxPos(), fetch)
+// position is the 1-based line number of the first visible line, for the
+// status bar.
+func (ss *ScrollState) position() int {
+	return ss.total() - ss.viewH - ss.offsetFromBottom + 1
 }
 
 // enterScrollMode switches fullscreen into scrollback browsing.
@@ -137,11 +141,11 @@ func (a *App) enterScrollMode() {
 	if width < 1 {
 		width = 1
 	}
-	// The pane's visible rows: the window was sized to the view +1 row for a
-	// status bar; assume the pane is viewH+1 rows, cropped to viewH.
-	a.scroll.Enter(history, viewH+1, viewH, width)
-	a.scroll.Bottom(a.fetchScrollback)
-	a.g.Update(func(*gocui.Gui) error { return nil })
+	// The target window is resized to exactly the view size on fullscreen
+	// entry, so the pane has (at most) viewH visible rows; capture-pane
+	// clamps requests past the pane's last row.
+	a.scroll.Enter(history, viewH, viewH, width)
+	a.updateScrollViewport()
 }
 
 // exitScrollMode returns to the live fullscreen view.
@@ -151,18 +155,49 @@ func (a *App) exitScrollMode() {
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }
 
-// fetchScrollback captures one viewport of the pane history and truncates
-// lines to the viewport width.
-func (a *App) fetchScrollback(start, end int) ([]string, error) {
+// updateScrollViewport refreshes the history size and asynchronously fetches
+// the viewport for the current position. The fetch goroutine reads no shared
+// state — every input is captured here on the event loop — and the result is
+// applied inside a gui.Update closure (also on the event loop), so a slow
+// tmux server cannot freeze the UI and only the latest fetch wins.
+func (a *App) updateScrollViewport() {
 	target := a.fullscreen.Target()
-	preview, err := a.svc.CaptureScrollback(context.Background(), target, start, end)
+	history, err := a.svc.HistorySize(context.Background(), target)
+	if err != nil {
+		return
+	}
+	a.scroll.history = history
+	start, end := a.scroll.rangeFor()
+	width := a.scroll.width
+
+	a.scroll.seq++
+	seq := a.scroll.seq
+	go func() {
+		lines, err := fetchScrollbackLines(a.svc, target, width, start, end)
+		if err != nil {
+			return
+		}
+		a.g.Update(func(*gocui.Gui) error {
+			if seq == a.scroll.seq && a.scroll.IsActive() {
+				a.scroll.lines = lines
+			}
+			return nil
+		})
+	}()
+}
+
+// fetchScrollbackLines captures one viewport of the pane history and
+// truncates lines to the given width. Pure helper: no App state is touched,
+// so it is safe to run from a goroutine.
+func fetchScrollbackLines(svc session.Provider, target string, width, start, end int) ([]string, error) {
+	preview, err := svc.CaptureScrollback(context.Background(), target, start, end)
 	if err != nil {
 		return nil, err
 	}
 	lines := strings.Split(preview.Content, "\n")
 	for i, line := range lines {
-		if ansi.StringWidth(line) > a.scroll.width {
-			lines[i] = ansi.Truncate(line, a.scroll.width, "")
+		if ansi.StringWidth(line) > width {
+			lines[i] = ansi.Truncate(line, width, "")
 		}
 	}
 	return lines, nil
@@ -180,9 +215,8 @@ func (a *App) renderScrollContent(v *gocui.View) {
 // scrollStatusText is the fullscreen status bar content in scroll mode.
 func (a *App) scrollStatusText() string {
 	name := a.fullscreen.Target()
-	pos := a.scroll.pos + 1
 	return " " + presentation.Bold + name + presentation.Reset + "  " +
-		presentation.FgDimGray + fmt.Sprintf("scroll %d/%d", pos, a.scroll.total()) + presentation.Reset + "  " +
+		presentation.FgDimGray + fmt.Sprintf("scroll %d/%d", a.scroll.position(), a.scroll.total()) + presentation.Reset + "  " +
 		presentation.StyledKey("j/k", "move") + "  " +
 		presentation.StyledKey("pgup/pgdn", "page") + "  " +
 		presentation.StyledKey("g/G", "top/bottom") + "  " +

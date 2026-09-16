@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -132,10 +133,12 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 		if err != nil {
 			return fmt.Errorf("write command script: %w", err)
 		}
-		// The path comes from CreateTemp in /tmp, so it is safe inside the
-		// single-quoted wrapper (no quotes, no spaces) — same trick as
-		// lazyclaude's launcher scripts.
-		command = fmt.Sprintf(`exec "$SHELL" -lic 'source %s; exec "$SHELL"'`, script)
+		// The path is always created directly under /tmp (never os.TempDir,
+		// which honors TMPDIR and could introduce spaces or metacharacters),
+		// so it is safe inside the single-quoted wrapper — same trick as
+		// lazyclaude's launcher scripts. The keyword to run the script is
+		// chosen per shell: fish uses `source`, POSIX shells use `.`.
+		command = fmt.Sprintf(`exec "$SHELL" -lic '%s %s; exec "$SHELL"'`, shellSourceKeyword(), script)
 	}
 
 	err := s.tmux.NewSession(ctx, tmux.NewSessionOpts{
@@ -155,10 +158,22 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 	return nil
 }
 
+// shellSourceKeyword returns the keyword the user's shell uses to run a
+// script in the current process: fish uses `source`, POSIX shells use `.`.
+// The wrapper itself is executed by "$SHELL", so both must agree.
+func shellSourceKeyword() string {
+	if filepath.Base(os.Getenv("SHELL")) == "fish" {
+		return "source"
+	}
+	return "."
+}
+
 // writeCommandScript writes the user's command to a temp file whose first
-// line removes the file itself. Returns the script path.
+// line removes the file itself. The file is created directly under /tmp (not
+// os.TempDir) so the path is always safe to interpolate into the
+// single-quoted shell wrapper, regardless of TMPDIR. Returns the script path.
 func writeCommandScript(command string) (string, error) {
-	f, err := os.CreateTemp("", "lazytmux-cmd-*")
+	f, err := os.CreateTemp("/tmp", "lazytmux-cmd-*")
 	if err != nil {
 		return "", err
 	}

@@ -113,6 +113,12 @@ func (a *App) layout(g *gocui.Gui) error {
 		a.lastWidth = maxX
 		a.lastHeight = maxY
 		blankScreen(g, maxX, maxY)
+		// The scroll viewport dimensions are tied to the pane geometry;
+		// leave scroll mode so the next entry recomputes them at the new
+		// size (the live preview resizes correctly on its own).
+		if a.scroll.IsActive() {
+			a.scroll.Exit()
+		}
 	}
 
 	// Same blanking when entering or leaving fullscreen: the dashboard and
