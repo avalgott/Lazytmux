@@ -23,10 +23,11 @@ import (
 )
 
 // gitDescribeSuffix matches the suffixes `git describe` appends to tags:
-// "-<count>-g<abbrev>" with an optional "-dirty". Anything else after the
-// version triplet (rc.1, beta, and SemVer's numeric prerelease identifiers
-// like "0" or "20260916") is a real prerelease marker.
-var gitDescribeSuffix = regexp.MustCompile(`^[0-9]+-g[0-9a-f]+(-dirty)?$`)
+// "-<count>-g<abbrev>" with an optional "-dirty", and the bare "-dirty"
+// produced when the checkout is dirty exactly at a tagged commit. Anything
+// else after the version triplet (rc.1, beta, and SemVer's numeric
+// prerelease identifiers like "0" or "20260916") is a real prerelease marker.
+var gitDescribeSuffix = regexp.MustCompile(`^([0-9]+-g[0-9a-f]+(-dirty)?|dirty)$`)
 
 const (
 	userAgent       = "lazytmux"

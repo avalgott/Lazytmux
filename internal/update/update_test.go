@@ -31,6 +31,7 @@ func TestVersionTriplet(t *testing.T) {
 		{"v0.1.0", 0, 1, 0, false, true},
 		{"0.1.0", 0, 1, 0, false, true},
 		{"v0.1.0-2-gabc1234-dirty", 0, 1, 0, false, true},
+		{"v0.1.0-dirty", 0, 1, 0, false, true},
 		{"v0.1.0-rc.1", 0, 1, 0, true, true},
 		{"v0.2.0-beta", 0, 2, 0, true, true},
 		{"v1.0.0-0", 1, 0, 0, true, true},
@@ -64,6 +65,7 @@ func TestCompareVersions(t *testing.T) {
 		{"v0.2.0", "v0.1.0", 1},
 		{"v0.1.10", "v0.1.9", 1},
 		{"v0.1.0-2-gabc", "v0.1.0", 0}, // git describe suffix does not count
+		{"v0.1.0-dirty", "v0.1.0", 0},  // dirty-at-tag is not a prerelease
 		{"v0.1.0-rc.1", "v0.1.0", -1},  // prereleases update to the release
 		{"v0.1.0", "v0.1.0-rc.1", 1},
 		{"v1.0.0-0", "v1.0.0", -1}, // SemVer numeric prerelease identifiers
