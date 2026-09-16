@@ -1120,3 +1120,39 @@ func TestPreviewScrollNotResetWhenCursorClamped(t *testing.T) {
 	assert.Equal(t, 1, app.cursor)
 	assert.False(t, app.previewScroll.IsActive())
 }
+
+func TestPendingTopCancelledByLaterNavigation(t *testing.T) {
+	ss := &ScrollState{}
+	ss.Enter(10, 78) // snapshot not loaded yet
+
+	// g while loading records a top request...
+	ss.Top()
+	assert.True(t, ss.pendingTop)
+
+	// ...but a later j/k/Page gesture is the latest intent.
+	ss.Move(-1)
+	assert.False(t, ss.pendingTop, "navigation after g cancels the pending top")
+
+	ss.lines = make([]string, 30)
+	ss.total = 30
+	ss.loaded = true
+	ss.clampOffset()
+	assert.Equal(t, 1, ss.offsetFromBottom, "the load honors the latest gesture, not the stale top request")
+}
+
+func TestPreviewScrollTopThenMoveWhileLoading(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+
+	app.previewScrollTop()
+	assert.True(t, app.previewScroll.pendingTop)
+	app.previewScroll.Move(-2)
+	assert.False(t, app.previewScroll.pendingTop)
+
+	seq := app.previewScroll.seq
+	app.applyPreviewScrollLoad(seq, make([]string, 30), nil)
+	assert.True(t, app.previewScroll.IsActive(), "offset 2 is not the bottom, so browsing continues")
+	assert.Equal(t, 2, app.previewScroll.offsetFromBottom, "the later navigation wins over the stale top")
+}
