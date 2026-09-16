@@ -132,6 +132,18 @@ func TestSha256Hex(t *testing.T) {
 	assert.Equal(t, "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03", sum)
 }
 
+func TestResolveExecutable(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "lazytmux")
+	require.NoError(t, os.WriteFile(target, []byte("x"), 0o755))
+	link := filepath.Join(dir, "lazytmux-link")
+	require.NoError(t, os.Symlink(target, link))
+
+	assert.Equal(t, target, resolveExecutable(link), "symlinks resolve to the real binary")
+	assert.Equal(t, target, resolveExecutable(target), "plain paths pass through")
+	assert.Equal(t, "/nonexistent/lazytmux", resolveExecutable("/nonexistent/lazytmux"), "unresolvable paths fall back unchanged")
+}
+
 func TestExtractBinaryMissing(t *testing.T) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)

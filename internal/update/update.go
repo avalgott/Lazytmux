@@ -136,8 +136,23 @@ func Run(current string) error {
 	if err != nil {
 		return fmt.Errorf("resolve binary path: %w", err)
 	}
+	// os.Executable may return the symlink used to launch the process on
+	// some platforms; resolve it so the rename replaces the actual binary,
+	// not a link to it.
+	executable = resolveExecutable(executable)
 
 	return run(current, goos, goarch, executable, &http.Client{Timeout: downloadTimeout})
+}
+
+// resolveExecutable resolves symlinks in path so an update replaces the
+// actual binary rather than a link to it. Falls back to the original path
+// when resolution fails — a best-effort guard, not a hard requirement.
+func resolveExecutable(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	return resolved
 }
 
 // run performs the update against the resolved endpoints. Split out of Run
