@@ -802,9 +802,12 @@ func TestScrollPositionClampedToOne(t *testing.T) {
 
 // loadPreviewSnapshot simulates a completed snapshot load in headless mode
 // (gui.Update never runs there, so the loader goroutine's result is applied
-// via the direct applier with the current seq).
+// via the direct applier with the current seq). A load that lands at the
+// live bottom (offset 0) exits the mode by design, so a first upward gesture
+// is simulated before the load completes.
 func loadPreviewSnapshot(t *testing.T, app *App, lines []string) {
 	t.Helper()
+	app.previewScroll.Move(-1)
 	seq := app.previewScroll.seq
 	app.applyPreviewScrollLoad(seq, lines, nil)
 	require.True(t, app.previewScroll.loaded)
@@ -870,7 +873,7 @@ func TestPreviewFocusedJScrollsInsteadOfMovingCursor(t *testing.T) {
 
 	loadPreviewSnapshot(t, app, make([]string, 40))
 	require.NoError(t, app.cursorMoveHandler(-1)(app.g, nil))
-	assert.Equal(t, 1, app.previewScroll.offsetFromBottom)
+	assert.Equal(t, 2, app.previewScroll.offsetFromBottom)
 	assert.Equal(t, 0, app.cursor, "cursor must not move while the preview is focused")
 }
 
@@ -887,6 +890,7 @@ func TestPreviewScrollViewportRendering(t *testing.T) {
 		lines[i] = fmt.Sprintf("line-%02d", i)
 	}
 	loadPreviewSnapshot(t, app, lines)
+	app.previewScroll.offsetFromBottom = 0 // state-only: bottom viewport
 
 	require.NoError(t, app.layout(app.g))
 	v, err := app.g.View("main")
@@ -905,13 +909,30 @@ func TestPreviewScrollMoveExitsAtBottom(t *testing.T) {
 	loadPreviewSnapshot(t, app, make([]string, 20))
 
 	app.previewScroll.Move(-1)
-	assert.Equal(t, 1, app.previewScroll.offsetFromBottom)
+	assert.Equal(t, 2, app.previewScroll.offsetFromBottom)
 	app.previewScroll.Move(1)
-	assert.Equal(t, 0, app.previewScroll.offsetFromBottom)
+	assert.Equal(t, 1, app.previewScroll.offsetFromBottom)
 
-	// previewScrollMove exits the mode when the live bottom is reached.
+	// previewScrollMove exits the mode when the live bottom is reached —
+	// dispatch through the preview-focused path (focusMain = true) so the
+	// bottom-exit, not the session-change hook, is what is exercised.
+	app.focusMain = true
 	require.NoError(t, app.cursorMoveHandler(1)(app.g, nil))
 	assert.False(t, app.previewScroll.IsActive())
+	assert.Equal(t, "", app.previewScrollTarget)
+}
+
+func TestPreviewScrollLoadAtBottomExits(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	seq := app.previewScroll.seq
+
+	// The first gesture pointed at the live bottom (offset 0) while the
+	// snapshot was loading: the load must return to the live capture.
+	app.applyPreviewScrollLoad(seq, make([]string, 20), nil)
+	assert.False(t, app.previewScroll.IsActive(), "a load landing at the live bottom exits scroll mode")
 	assert.Equal(t, "", app.previewScrollTarget)
 }
 
@@ -1014,7 +1035,7 @@ func TestPageHandlerDashboardDispatch(t *testing.T) {
 	require.NoError(t, app.pageHandler("PageUp")(app.g, nil))
 	assert.True(t, app.previewScroll.IsActive())
 	loadPreviewSnapshot(t, app, make([]string, 40))
-	app.previewScroll.offsetFromBottom = 0
+	app.previewScroll.offsetFromBottom = 0 // state-only reset before paging
 	require.NoError(t, app.pageHandler("PageUp")(app.g, nil))
 	// Half the 37-row viewport is 18, but the 40-line snapshot clamps the
 	// offset to maxOffset = 40-37 = 3.
