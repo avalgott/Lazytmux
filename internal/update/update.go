@@ -29,11 +29,16 @@ import (
 var gitDescribeSuffix = regexp.MustCompile(`^[0-9]+-g[0-9a-f]+(-dirty)?$`)
 
 const (
-	repoAPI         = "https://api.github.com/repos/avalgott/Lazytmux/releases/latest"
-	repoDL          = "https://github.com/avalgott/Lazytmux/releases/download"
 	userAgent       = "lazytmux"
 	downloadTimeout = 2 * time.Minute
 	maxJSONBytes    = 1 << 20 // cap the release metadata read
+)
+
+// The API and download endpoints are vars so tests can point them at an
+// httptest server.
+var (
+	repoAPI = "https://api.github.com/repos/avalgott/Lazytmux/releases/latest"
+	repoDL  = "https://github.com/avalgott/Lazytmux/releases/download"
 )
 
 // releaseInfo is the subset of the GitHub releases/latest response we use.
@@ -55,12 +60,15 @@ func assetName(tag, goos, goarch string) string {
 func versionTriplet(v string) (maj, min, pat int, prerelease, ok bool) {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
 
+	// Strip build metadata before looking for a prerelease suffix: build
+	// metadata may itself contain hyphens ("+build-7") and never affects
+	// ordering.
+	if i := strings.Index(v, "+"); i >= 0 {
+		v = v[:i]
+	}
 	rest := ""
 	if i := strings.Index(v, "-"); i >= 0 {
 		rest = v[i:]
-		v = v[:i]
-	}
-	if i := strings.Index(v, "+"); i >= 0 {
 		v = v[:i]
 	}
 
@@ -123,8 +131,18 @@ func Run(current string) error {
 		return fmt.Errorf("no prebuilt binary for %s/%s — install from source instead", goos, goarch)
 	}
 
-	client := &http.Client{Timeout: downloadTimeout}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve binary path: %w", err)
+	}
 
+	return run(current, goos, goarch, executable, &http.Client{Timeout: downloadTimeout})
+}
+
+// run performs the update against the resolved endpoints. Split out of Run
+// so tests can inject the platform, the executable path, and an httptest
+// server.
+func run(current, goos, goarch, executable string, client *http.Client) error {
 	tag, err := latestTag(client)
 	if err != nil {
 		return err
@@ -132,11 +150,6 @@ func Run(current string) error {
 	if compareVersions(current, tag) >= 0 {
 		fmt.Printf("lazytmux is up to date (%s)\n", current)
 		return nil
-	}
-
-	executable, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolve binary path: %w", err)
 	}
 
 	asset := assetName(tag, goos, goarch)
@@ -171,18 +184,20 @@ func Run(current string) error {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tarballName := tarball.Name()
+	// The archive is always temporary: it must not linger next to the
+	// executable after a successful update.
+	defer tarball.Close()
+	defer os.Remove(tarballName)
+
 	tmp, err := os.CreateTemp(dir, ".lazytmux-update-*")
 	if err != nil {
-		os.Remove(tarballName)
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	replaced := false
 	defer func() {
-		tarball.Close()
 		tmp.Close()
 		if !replaced {
-			os.Remove(tarballName)
 			os.Remove(tmpName)
 		}
 	}()

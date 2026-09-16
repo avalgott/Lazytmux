@@ -50,6 +50,7 @@ install_from_release() {
 
   TARBALL="lazytmux_${VERSION#v}_${PLATFORM}.tar.gz"
   URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
+  CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
 
   echo "Installing lazytmux ${VERSION} (${PLATFORM})..."
 
@@ -57,6 +58,21 @@ install_from_release() {
   trap 'rm -rf "$TMPDIR"' EXIT
 
   curl -fsSL "$URL" -o "${TMPDIR}/${TARBALL}"
+
+  # Verify the archive against the release's published checksums before
+  # installing anything.
+  curl -fsSL "$CHECKSUM_URL" -o "${TMPDIR}/checksums.txt"
+  EXPECTED="$(awk -v f="$TARBALL" '$2 == f { print $1; exit }' "${TMPDIR}/checksums.txt")"
+  if [ -z "$EXPECTED" ]; then
+    echo "Error: no checksum for ${TARBALL} in checksums.txt" >&2
+    exit 1
+  fi
+  ACTUAL="$( (sha256sum "${TMPDIR}/${TARBALL}" 2>/dev/null || shasum -a 256 "${TMPDIR}/${TARBALL}" 2>/dev/null) | awk '{ print $1 }')"
+  if [ "$ACTUAL" != "$EXPECTED" ]; then
+    echo "Error: checksum mismatch for ${TARBALL} (got ${ACTUAL}, want ${EXPECTED})" >&2
+    exit 1
+  fi
+
   tar -xzf "${TMPDIR}/${TARBALL}" -C "$TMPDIR"
 
   mkdir -p "$INSTALL_DIR"
