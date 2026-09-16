@@ -56,6 +56,8 @@ type Provider interface {
 	// HistorySize returns the number of lines in the pane's scrollback
 	// history (the visible screen excluded).
 	HistorySize(ctx context.Context, name string) (int, error)
+	// PaneHeight returns the visible row count of the session's active pane.
+	PaneHeight(ctx context.Context, name string) (int, error)
 	// SendKeys sends tmux key names (e.g. "Enter", "Up", "C-c") to the
 	// session's active pane. Used by fullscreen passthrough mode.
 	SendKeys(ctx context.Context, name string, keys ...string) error
@@ -171,19 +173,22 @@ func buildShellWrapper(script string) (string, error) {
 		// SHELL unset: the wrapper falls back to /bin/sh at runtime.
 		name = "sh"
 	}
-	source := "."
+	// The templates are per shell family — fish does not understand POSIX
+	// ${var:-default} expansion, so each family gets its own syntax.
+	var relaunch string
 	switch name {
 	case "sh", "bash", "dash", "ksh", "zsh":
-		source = "."
+		// ${SHELL:-/bin/sh} guards against SHELL being unset in the pane.
+		relaunch = `exec "${SHELL:-/bin/sh}" -lic '. ` + script + `; exec "${SHELL:-/bin/sh}"'`
 	case "fish":
-		source = "source"
+		// SHELL was resolved from the environment to get here, so it is set.
+		relaunch = `exec "$SHELL" -lic 'source ` + script + `; exec "$SHELL"'`
 	case "csh", "tcsh":
 		return "", fmt.Errorf("shell %q is not supported for command sessions — use an empty command or a POSIX shell", name)
 	default:
 		return "", fmt.Errorf("unknown shell %q — command sessions support sh, bash, dash, ksh, zsh, and fish", name)
 	}
-	// ${SHELL:-/bin/sh} guards against SHELL being unset in the pane.
-	return fmt.Sprintf(`exec "${SHELL:-/bin/sh}" -lic '%s %s; exec "${SHELL:-/bin/sh}"'`, source, script), nil
+	return relaunch, nil
 }
 
 // writeCommandScript writes the user's command to a temp file whose first
@@ -270,6 +275,16 @@ func (s *Service) CaptureScrollback(ctx context.Context, name string, start, end
 // HistorySize returns the number of scrollback lines in the session's pane.
 func (s *Service) HistorySize(ctx context.Context, name string) (int, error) {
 	out, err := s.tmux.ShowMessage(ctx, name, "#{history_size}")
+	if err != nil {
+		return 0, err
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(out))
+	return n, nil
+}
+
+// PaneHeight returns the visible row count of the session's active pane.
+func (s *Service) PaneHeight(ctx context.Context, name string) (int, error) {
+	out, err := s.tmux.ShowMessage(ctx, name, "#{pane_height}")
 	if err != nil {
 		return 0, err
 	}

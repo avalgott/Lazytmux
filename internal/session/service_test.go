@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,7 +101,7 @@ func TestServiceCreateUsesFishSourceKeyword(t *testing.T) {
 	opts := mock.LastNewSessionOpts
 	assert.Contains(t, opts.Command, `-lic 'source /tmp/lazytmux-cmd-`, "fish uses `source`, not `.`")
 	t.Cleanup(func() {
-		script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "${SHELL:-/bin/sh}" -lic 'source `), `; exec "${SHELL:-/bin/sh}"'`)
+		script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic 'source `), `; exec "$SHELL"'`)
 		_ = os.Remove(script)
 	})
 }
@@ -308,4 +309,50 @@ func TestValidateName(t *testing.T) {
 			assert.NoError(t, err, "name %q should be accepted", c.name)
 		}
 	}
+}
+
+// TestShellWrapperExecutesUnderPOSIX runs the generated wrapper in a real
+// /bin/sh: the user command must run and a fresh shell must take over.
+func TestShellWrapperExecutesUnderPOSIX(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "cmd.sh")
+	require.NoError(t, os.WriteFile(script, []byte("echo WRAPPER-RAN\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sink"), []byte(""), 0o600))
+
+	wrapper, err := buildShellWrapper(script)
+	require.NoError(t, err)
+
+	// Run exactly as tmux would: sh -c '<wrapper>' with stdin from a file.
+	cmd := exec.Command("sh", "-c", wrapper)
+	cmd.Stdin = strings.NewReader("echo SHELL-ALIVE; exit\n")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "wrapper output: %s", out)
+	assert.Contains(t, string(out), "WRAPPER-RAN")
+	assert.Contains(t, string(out), "SHELL-ALIVE", "the relaunched shell must run")
+}
+
+// TestShellWrapperExecutesUnderFish runs the generated wrapper in a real
+// fish shell when one is installed (the wrapper template is fish-specific).
+func TestShellWrapperExecutesUnderFish(t *testing.T) {
+	fish, err := exec.LookPath("fish")
+	if err != nil {
+		t.Skip("fish is not installed")
+	}
+	t.Setenv("SHELL", fish)
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "cmd.sh")
+	require.NoError(t, os.WriteFile(script, []byte("echo WRAPPER-RAN\n"), 0o700))
+
+	wrapper, err := buildShellWrapper(script)
+	require.NoError(t, err)
+
+	cmd := exec.Command("sh", "-c", wrapper)
+	cmd.Stdin = strings.NewReader("echo SHELL-ALIVE; exit\n")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "wrapper output: %s", out)
+	assert.Contains(t, string(out), "WRAPPER-RAN")
+	assert.Contains(t, string(out), "SHELL-ALIVE", "the relaunched fish shell must run")
 }

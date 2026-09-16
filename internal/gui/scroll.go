@@ -79,6 +79,12 @@ func (ss *ScrollState) clampOffset() {
 	if ss.offsetFromBottom < 0 {
 		ss.offsetFromBottom = 0
 	}
+	if !ss.loaded {
+		// While the snapshot is loading the real total is unknown; preserve
+		// accumulated offsets (the first wheel gesture must still scroll)
+		// and let the load callback clamp once the total is known.
+		return
+	}
 	if max := ss.maxOffset(); ss.offsetFromBottom > max {
 		ss.offsetFromBottom = max
 	}
@@ -147,32 +153,62 @@ func (a *App) enterScrollMode() {
 	}
 	a.scroll.Enter(viewH, width)
 
-	// Load the snapshot in a goroutine: the history query and the capture
-	// both run outside the event loop, and only the latest load applies.
+	// Load the snapshot in a goroutine: the tmux queries and the capture all
+	// run outside the event loop, and only the latest load applies.
 	a.scroll.seq++
 	seq := a.scroll.seq
 	go func() {
+		// Derive the capture range from the pane itself: the fullscreen
+		// resize runs in another goroutine and may not have completed yet,
+		// so assuming viewH visible rows can capture at stale dimensions.
 		history, err := a.svc.HistorySize(context.Background(), target)
 		if err != nil {
+			a.finishScrollLoad(seq, nil, err)
 			return
 		}
-		// The target window is resized to exactly the view size on fullscreen
-		// entry, so the pane has (at most) viewH visible rows; capture-pane
-		// clamps requests past the pane's last row.
-		lines, err := fetchScrollbackLines(a.svc, target, width, -history, viewH-1)
+		paneHeight, err := a.svc.PaneHeight(context.Background(), target)
 		if err != nil {
+			a.finishScrollLoad(seq, nil, err)
 			return
 		}
-		a.g.Update(func(*gocui.Gui) error {
-			if seq == a.scroll.seq && a.scroll.IsActive() {
-				a.scroll.lines = lines
-				a.scroll.total = len(lines)
-				a.scroll.loaded = true
-				a.scroll.clampOffset()
-			}
-			return nil
-		})
+		lines, err := fetchScrollbackLines(a.svc, target, width, -history, paneHeight-1)
+		if err != nil {
+			a.finishScrollLoad(seq, nil, err)
+			return
+		}
+		a.finishScrollLoad(seq, lines, nil)
 	}()
+}
+
+// finishScrollLoad applies the snapshot load (or its failure) on the event
+// loop. A failed load leaves scroll mode instead of stranding the user in a
+// perpetual "loading" state, and records the reason in the dashboard log.
+func (a *App) finishScrollLoad(seq int64, lines []string, loadErr error) {
+	a.g.Update(func(*gocui.Gui) error {
+		a.applyScrollLoad(seq, lines, loadErr)
+		return nil
+	})
+}
+
+// applyScrollLoad is the event-loop half of finishScrollLoad, split out so
+// tests can drive it directly (headless mode never runs gui.Update).
+func (a *App) applyScrollLoad(seq int64, lines []string, loadErr error) {
+	if seq != a.scroll.seq {
+		return // superseded
+	}
+	if loadErr != nil {
+		if a.scroll.IsActive() {
+			a.setError(fmt.Sprintf("scrollback: %v", loadErr))
+			a.exitScrollMode()
+		}
+		return
+	}
+	if a.scroll.IsActive() {
+		a.scroll.lines = lines
+		a.scroll.total = len(lines)
+		a.scroll.loaded = true
+		a.scroll.clampOffset()
+	}
 }
 
 // exitScrollMode returns to the live fullscreen view.
@@ -190,13 +226,21 @@ func fetchScrollbackLines(svc session.Provider, target string, width, start, end
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(preview.Content, "\n")
+	return splitScrollback(preview.Content, width), nil
+}
+
+// splitScrollback splits raw capture output into lines and truncates them to
+// the given width. capture-pane -p terminates its output with a newline;
+// exactly one is stripped so it does not become a phantom final line, while
+// preceding newlines that represent blank rows are preserved.
+func splitScrollback(content string, width int) []string {
+	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
 	for i, line := range lines {
 		if ansi.StringWidth(line) > width {
 			lines[i] = ansi.Truncate(line, width, "")
 		}
 	}
-	return lines, nil
+	return lines
 }
 
 // renderScrollContent draws the scroll viewport into the fullscreen view.
