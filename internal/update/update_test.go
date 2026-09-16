@@ -4,6 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,6 +26,8 @@ func TestVersionTriplet(t *testing.T) {
 		{"v0.1.0-2-gabc1234-dirty", 0, 1, 0, false, true},
 		{"v0.1.0-rc.1", 0, 1, 0, true, true},
 		{"v0.2.0-beta", 0, 2, 0, true, true},
+		{"v1.0.0-0", 1, 0, 0, true, true},
+		{"v1.0.0-20260916", 1, 0, 0, true, true},
 		{"v1.12.3", 1, 12, 3, false, true},
 		{"dev", 0, 0, 0, false, false},
 		{"abc1234-dirty", 0, 0, 0, false, false},
@@ -52,6 +57,8 @@ func TestCompareVersions(t *testing.T) {
 		{"v0.1.0-2-gabc", "v0.1.0", 0}, // git describe suffix does not count
 		{"v0.1.0-rc.1", "v0.1.0", -1},  // prereleases update to the release
 		{"v0.1.0", "v0.1.0-rc.1", 1},
+		{"v1.0.0-0", "v1.0.0", -1}, // SemVer numeric prerelease identifiers
+		{"v1.0.0-20260916", "v1.0.0", -1},
 		{"v0.2.0-beta", "v0.1.0", 1},
 		{"dev", "v0.1.0", -1}, // unknown versions are older
 		{"abc1234", "v0.1.0", -1},
@@ -86,6 +93,31 @@ func TestExtractBinary(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, extractBinary(&buf, &out))
 	assert.Equal(t, "BINARY-CONTENT", out.String())
+}
+
+func TestParseChecksums(t *testing.T) {
+	content := strings.Join([]string{
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  lazytmux_0.1.0_linux_amd64.tar.gz",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  lazytmux_0.1.0_darwin_arm64.tar.gz",
+		"not a checksum line",
+	}, "\n") + "\n"
+
+	sums := parseChecksums(content)
+	assert.Equal(t, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", sums["lazytmux_0.1.0_linux_amd64.tar.gz"])
+	assert.Equal(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sums["lazytmux_0.1.0_darwin_arm64.tar.gz"])
+	_, ok := sums["lazytmux_0.1.0_windows_amd64.tar.gz"]
+	assert.False(t, ok)
+}
+
+func TestSha256Hex(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f")
+	require.NoError(t, os.WriteFile(path, []byte("hello\n"), 0o644))
+
+	sum, err := sha256Hex(path)
+	require.NoError(t, err)
+	// sha256("hello\n") — precomputed.
+	assert.Equal(t, "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03", sum)
 }
 
 func TestExtractBinaryMissing(t *testing.T) {

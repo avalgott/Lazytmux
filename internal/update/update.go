@@ -7,17 +7,26 @@ package update
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// gitDescribeSuffix matches the suffixes `git describe` appends to tags:
+// "-<count>-g<abbrev>" with an optional "-dirty". Anything else after the
+// version triplet (rc.1, beta, and SemVer's numeric prerelease identifiers
+// like "0" or "20260916") is a real prerelease marker.
+var gitDescribeSuffix = regexp.MustCompile(`^[0-9]+-g[0-9a-f]+(-dirty)?$`)
 
 const (
 	repoAPI         = "https://api.github.com/repos/avalgott/Lazytmux/releases/latest"
@@ -41,9 +50,8 @@ func assetName(tag, goos, goarch string) string {
 // versionTriplet extracts the leading MAJOR.MINOR.PATCH from a version
 // string ("v0.1.0", "0.1.0", "v0.1.0-2-gabc1234-dirty"). ok is false when no
 // triplet is present (e.g. dev builds without tags). prerelease is true when
-// the version carries a real prerelease marker (rc/beta/alpha/pre...);
-// git describe suffixes like "-2-gabc1234-dirty" start with a digit and do
-// not count.
+// the version carries anything that is not a git describe suffix after the
+// triplet — rc/beta/alpha markers and SemVer numeric identifiers alike.
 func versionTriplet(v string) (maj, min, pat int, prerelease, ok bool) {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
 
@@ -70,7 +78,7 @@ func versionTriplet(v string) (maj, min, pat int, prerelease, ok bool) {
 	}
 
 	marker := strings.TrimPrefix(rest, "-")
-	prerelease = marker != "" && (marker[0] < '0' || marker[0] > '9')
+	prerelease = marker != "" && !gitDescribeSuffix.MatchString(marker)
 	return nums[0], nums[1], nums[2], prerelease, true
 }
 
@@ -131,8 +139,20 @@ func Run(current string) error {
 		return fmt.Errorf("resolve binary path: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/%s/%s", repoDL, tag, assetName(tag, goos, goarch))
+	asset := assetName(tag, goos, goarch)
+	url := fmt.Sprintf("%s/%s/%s", repoDL, tag, asset)
 	fmt.Printf("updating lazytmux %s -> %s...\n", displayVersion(current), strings.TrimPrefix(tag, "v"))
+
+	// Verify the asset against the release's published checksums before
+	// executing anything: the download replaces the running binary.
+	checksums, err := fetchChecksums(client, tag)
+	if err != nil {
+		return err
+	}
+	expected, ok := checksums[asset]
+	if !ok {
+		return fmt.Errorf("release %s has no checksum for %s in checksums.txt", tag, asset)
+	}
 
 	resp, err := getWithUserAgent(client, url)
 	if err != nil {
@@ -143,25 +163,55 @@ func Run(current string) error {
 		return fmt.Errorf("download %s: %s", url, resp.Status)
 	}
 
-	// Extract into a temp file next to the binary so the final rename is
-	// atomic and stays on the same filesystem.
+	// Stage everything in temp files next to the binary so the final rename
+	// is atomic and stays on the same filesystem.
 	dir := filepath.Dir(executable)
+	tarball, err := os.CreateTemp(dir, ".lazytmux-update-*.tar.gz")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tarballName := tarball.Name()
 	tmp, err := os.CreateTemp(dir, ".lazytmux-update-*")
 	if err != nil {
+		os.Remove(tarballName)
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	replaced := false
 	defer func() {
+		tarball.Close()
 		tmp.Close()
 		if !replaced {
+			os.Remove(tarballName)
 			os.Remove(tmpName)
 		}
 	}()
 
-	if err := extractBinary(resp.Body, tmp); err != nil {
+	if _, err := io.Copy(tarball, resp.Body); err != nil {
+		return fmt.Errorf("download %s: %w", url, err)
+	}
+	if err := tarball.Close(); err != nil {
 		return err
 	}
+
+	sum, err := sha256Hex(tarballName)
+	if err != nil {
+		return err
+	}
+	if sum != expected {
+		return fmt.Errorf("checksum mismatch for %s (got %s, want %s)", asset, sum, expected)
+	}
+
+	f, err := os.Open(tarballName)
+	if err != nil {
+		return err
+	}
+	if err := extractBinary(f, tmp); err != nil {
+		f.Close()
+		return err
+	}
+	f.Close()
+
 	if err := tmp.Chmod(0o755); err != nil {
 		return err
 	}
@@ -175,6 +225,53 @@ func Run(current string) error {
 	replaced = true
 	fmt.Printf("updated lazytmux to %s\n", strings.TrimPrefix(tag, "v"))
 	return nil
+}
+
+// fetchChecksums downloads and parses the release's checksums.txt into a
+// map of asset name -> sha256 hex digest.
+func fetchChecksums(client *http.Client, tag string) (map[string]string, error) {
+	url := fmt.Sprintf("%s/%s/checksums.txt", repoDL, tag)
+	resp, err := getWithUserAgent(client, url)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s: %s", url, resp.Status)
+	}
+	content, err := io.ReadAll(io.LimitReader(resp.Body, maxJSONBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read checksums: %w", err)
+	}
+	return parseChecksums(string(content)), nil
+}
+
+// parseChecksums parses goreleaser's checksums.txt format: one
+// "<sha256>  <name>" line per asset.
+func parseChecksums(content string) map[string]string {
+	sums := make(map[string]string)
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || len(fields[0]) != sha256.Size*2 {
+			continue
+		}
+		sums[fields[1]] = strings.ToLower(fields[0])
+	}
+	return sums
+}
+
+// sha256Hex returns the sha256 digest of the file at path, hex-encoded.
+func sha256Hex(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // displayVersion renders the current version for user-facing messages.
