@@ -14,6 +14,7 @@ import (
 	"github.com/avalgott/Lazytmux/internal/core/tmux"
 	"github.com/avalgott/Lazytmux/internal/gui"
 	"github.com/avalgott/Lazytmux/internal/session"
+	"github.com/avalgott/Lazytmux/internal/update"
 )
 
 var (
@@ -22,6 +23,16 @@ var (
 )
 
 func main() {
+	// `lazytmux update` self-updates to the latest GitHub release instead of
+	// starting the TUI.
+	if len(os.Args) > 1 && os.Args[1] == "update" {
+		if err := update.Run(version); err != nil {
+			fmt.Fprintln(os.Stderr, "lazytmux update:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "lazytmux:", err)
 		os.Exit(1)
