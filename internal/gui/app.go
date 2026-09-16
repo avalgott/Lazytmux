@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -80,6 +81,7 @@ type App struct {
 	refreshBusy            atomic.Bool // true while a background session refresh is in flight
 	attachTarget           string      // session to attach to; set on Enter, main() acts on it
 	buffers                map[string]*LineBuffer
+	buffersMu              sync.Mutex // guards the buffers map (LineBuffer locks itself)
 }
 
 // logEntry is one line in the logs panel.
@@ -254,6 +256,7 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 	a.sessions = sessions
 
 	// Drop synthetic scrollback buffers of sessions that no longer exist.
+	a.buffersMu.Lock()
 	for name := range a.buffers {
 		found := false
 		for _, s := range a.sessions {
@@ -266,6 +269,7 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 			delete(a.buffers, name)
 		}
 	}
+	a.buffersMu.Unlock()
 
 	// Leave fullscreen automatically when the target session disappeared
 	// (e.g. its shell exited, or it was killed elsewhere).
@@ -388,7 +392,7 @@ const scrollBufferCap = 400
 
 // feedBuffer appends one full-pane capture to the session's synthetic
 // scrollback buffer, creating it on first use. Called from the capture
-// completion goroutine; LineBuffer locks internally.
+// completion goroutine.
 func (a *App) feedBuffer(name, content string) {
 	if name == "" || content == "" {
 		return
@@ -397,8 +401,10 @@ func (a *App) feedBuffer(name, content string) {
 }
 
 // bufferFor returns the session's synthetic scrollback buffer, creating an
-// empty one on first use. LineBuffer locks internally.
+// empty one on first use. The map is guarded; the LineBuffer locks itself.
 func (a *App) bufferFor(name string) *LineBuffer {
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
 	if a.buffers == nil {
 		a.buffers = make(map[string]*LineBuffer)
 	}
@@ -408,6 +414,14 @@ func (a *App) bufferFor(name string) *LineBuffer {
 		a.buffers[name] = b
 	}
 	return b
+}
+
+// bufferLookup returns the session's synthetic scrollback buffer without
+// creating one, or nil.
+func (a *App) bufferLookup(name string) *LineBuffer {
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	return a.buffers[name]
 }
 
 // appendLog adds an entry to the log, trimming the oldest entries when the

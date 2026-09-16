@@ -296,9 +296,9 @@ func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, erro
 	if len(lines) > preview.PaneHeight {
 		return lines, preview.PaneHeight, nil // real tmux history
 	}
-	// No tmux history: fall back to the synthetic buffer. A direct map
-	// lookup — bufferFor would create an empty buffer on every attempt.
-	if b := a.buffers[target]; b != nil {
+	// No tmux history: fall back to the synthetic buffer. bufferLookup does
+	// not create — an empty buffer must not exist for every attempted scroll.
+	if b := a.bufferLookup(target); b != nil {
 		if snap := b.Snapshot(); len(snap) > preview.PaneHeight {
 			return truncateLines(snap, width), preview.PaneHeight, nil
 		}

@@ -1417,3 +1417,20 @@ func TestScrollSnapshotTruncatesBufferToWidth(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"short", strings.Repeat("w", 20), "tail"}, lines)
 }
+
+func TestScrollSnapshotConcurrentWithFeeds(t *testing.T) {
+	p := &fakeProvider{paneHeight: 5}
+	app := newTestApp(t, p)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 25; j++ {
+				app.feedBuffer("devbox", fmt.Sprintf("g%d-%d-a\ng%d-%d-b\ng%d-%d-c", i, j, i, j, i, j))
+				_, _, _ = app.fetchScrollSnapshot("devbox", 80)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
