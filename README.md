@@ -54,6 +54,15 @@ make test                      # go test -race -cover ./...
 
 Releases are built automatically from `v*` tags via GoReleaser (see `.github/workflows/release.yml`).
 
+### Updating
+
+```bash
+lazytmux update    # self-update to the latest release (binary installs)
+make update        # git pull + make install (source clones)
+```
+
+`lazytmux update` compares the embedded version against the latest GitHub release, downloads the matching prebuilt binary, and atomically replaces the running one — no repository or Go needed. Re-running the install one-liner does the same thing.
+
 ## Usage
 
 Run `lazytmux` from any shell — inside tmux or outside it:

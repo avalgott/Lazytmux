@@ -5,7 +5,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
 PREFIX ?= $(HOME)/.local
 
-.PHONY: build test install uninstall clean
+.PHONY: build test install uninstall update clean
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/$(BINARY)
@@ -16,6 +16,9 @@ test:
 install: build
 	install -d $(PREFIX)/bin
 	install -m 755 bin/$(BINARY) $(PREFIX)/bin/$(BINARY)
+
+update:
+	git pull && $(MAKE) install
 
 uninstall:
 	rm -f $(PREFIX)/bin/$(BINARY)
