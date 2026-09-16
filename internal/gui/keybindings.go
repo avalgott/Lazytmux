@@ -320,6 +320,11 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 		if a.dialog != DialogNone {
 			return nil
 		}
+		// PageDown at the live bottom has nothing to browse; entering would
+		// start a full history load that immediately exits again.
+		if !a.previewScroll.IsActive() && delta > 0 {
+			return nil
+		}
 		if !a.previewScroll.IsActive() {
 			a.enterPreviewScroll()
 		}

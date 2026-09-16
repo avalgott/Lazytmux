@@ -376,6 +376,11 @@ func (a *App) previewScrollMove(delta int) {
 	if a.fullscreen.IsActive() || a.dialog != DialogNone {
 		return
 	}
+	// A positive delta at the live bottom has nothing to browse: entering
+	// would start a full history load that immediately exits again.
+	if !a.previewScroll.IsActive() && delta > 0 {
+		return
+	}
 	if !a.previewScroll.IsActive() {
 		a.enterPreviewScroll()
 	}

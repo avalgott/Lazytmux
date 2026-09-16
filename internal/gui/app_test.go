@@ -857,9 +857,9 @@ func TestPreviewFocusedJScrollsInsteadOfMovingCursor(t *testing.T) {
 	require.NoError(t, app.layout(app.g))
 	app.focusMain = true
 
-	// j with the preview focused enters scroll mode; the session cursor must
-	// not move.
-	require.NoError(t, app.cursorMoveHandler(1)(app.g, nil))
+	// k with the preview focused enters scroll mode (j at the live bottom is
+	// a no-op by design); the session cursor must not move either way.
+	require.NoError(t, app.cursorMoveHandler(-1)(app.g, nil))
 	assert.Equal(t, 0, app.cursor)
 	assert.True(t, app.previewScroll.IsActive())
 	assert.Equal(t, "a", app.previewScrollTarget)
@@ -873,7 +873,7 @@ func TestPreviewFocusedJScrollsInsteadOfMovingCursor(t *testing.T) {
 
 	loadPreviewSnapshot(t, app, make([]string, 40))
 	require.NoError(t, app.cursorMoveHandler(-1)(app.g, nil))
-	assert.Equal(t, 2, app.previewScroll.offsetFromBottom)
+	assert.Equal(t, 3, app.previewScroll.offsetFromBottom)
 	assert.Equal(t, 0, app.cursor, "cursor must not move while the preview is focused")
 }
 
@@ -980,7 +980,13 @@ func TestPreviewScrollResetsOnResize(t *testing.T) {
 	app.previewScrollTarget = "devbox"
 	app.previewScroll.Enter(10, 78)
 	loadPreviewSnapshot(t, app, make([]string, 20))
+
+	// Seed the stored dimensions so the first layout is NOT seen as a
+	// resize; it must preserve the active scroll state.
+	app.lastWidth = 120
+	app.lastHeight = 40
 	require.NoError(t, app.layout(app.g))
+	assert.True(t, app.previewScroll.IsActive(), "the initial layout must preserve the scroll state")
 
 	app.lastWidth = 0 // force resize detection
 	require.NoError(t, app.layout(app.g))
