@@ -61,7 +61,7 @@ lazytmux update    # self-update to the latest release (binary installs)
 make update        # git pull + make install (source clones)
 ```
 
-`lazytmux update` compares the embedded version against the latest GitHub release, downloads the matching prebuilt binary, and atomically replaces the running one — no repository or Go needed. Re-running the install one-liner does the same thing.
+`lazytmux update` compares the embedded version against the latest GitHub release, downloads the matching prebuilt binary (verifying it against the release's published SHA-256 checksums), and atomically replaces the running one — no repository or Go needed. Re-running the install one-liner does the same thing.
 
 ## Usage
 
