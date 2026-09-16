@@ -172,8 +172,20 @@ func (a *App) enterScrollMode() {
 	}
 	a.scroll.Enter(viewH, width)
 
-	// Load the snapshot in a goroutine: the single atomic tmux capture runs
-	// outside the event loop, and only the latest load applies.
+	a.restartScrollLoad()
+}
+
+// restartScrollLoad (re)loads the scroll snapshot in a goroutine: the single
+// atomic tmux capture runs outside the event loop, and only the latest load
+// applies. Called on entry and again when a pending pane resize completes,
+// so the frozen viewport always matches the pane's final geometry.
+func (a *App) restartScrollLoad() {
+	target := a.fullscreen.Target()
+	if target == "" || !a.scroll.IsActive() {
+		return
+	}
+	width := a.scroll.width
+
 	a.scroll.seq++
 	seq := a.scroll.seq
 	go func() {

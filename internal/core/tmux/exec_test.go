@@ -170,19 +170,19 @@ func TestPrependSocket(t *testing.T) {
 	})
 }
 
-func TestCaptureRangePreservesBlankLines(t *testing.T) {
+func TestCaptureHistoryPreservesBlankLines(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "fake-tmux")
 	// Prints two blank lines, "x", then two blank lines. The leading and
-	// trailing blanks are significant for -S/-E offset math.
+	// trailing blanks are significant for the snapshot's line accounting.
 	script := "#!/bin/sh\nfor f in \"$@\"; do :; done\necho; echo; echo x; echo; echo\n"
 	require.NoError(t, os.WriteFile(fake, []byte(script), 0o755))
 
 	c := &ExecClient{tmuxBin: fake}
 
-	content, err := c.CapturePaneANSIRange(context.Background(), "s", -5, 5)
+	content, err := c.CapturePaneANSIHistory(context.Background(), "s")
 	require.NoError(t, err)
-	assert.Equal(t, "\n\nx\n\n\n", content, "range captures must preserve blank lines")
+	assert.Equal(t, "\n\nx\n\n\n", content, "history captures must preserve blank lines")
 
 	trimmed, err := c.run(context.Background(), "display-message", "-p", "x")
 	require.NoError(t, err)

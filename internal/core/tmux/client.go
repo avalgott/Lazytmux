@@ -53,12 +53,6 @@ type Client interface {
 	// between two separate calls, which puts the rendered cursor one row off.
 	CapturePaneANSIWithCursor(ctx context.Context, target string) (content string, cursorX, cursorY int, err error)
 
-	// CapturePaneANSIRange captures a range of pane content with ANSI escape codes.
-	// start and end are line offsets passed as -S and -E flags to capture-pane.
-	// Negative values count from the end of the scrollback buffer.
-	CapturePaneANSIRange(ctx context.Context, target string, start, end int) (string, error)
-
-
 	// CapturePaneANSIHistory captures the whole pane history from tmux's
 	// oldest-history sentinel ("-S -") to the current bottom in one
 	// operation. Both bounds are resolved atomically by tmux, so a pane

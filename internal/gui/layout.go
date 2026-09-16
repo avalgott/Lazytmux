@@ -297,7 +297,16 @@ func (a *App) resizeFullScreenTarget(v *gocui.View) {
 
 	go func() {
 		_ = a.svc.ResizeWindow(context.Background(), target, previewW, previewH)
-		a.g.Update(func(*gocui.Gui) error { return nil })
+		a.g.Update(func(*gocui.Gui) error {
+			// The resize may have completed after a scroll snapshot was
+			// captured at the old pane geometry (the terminal itself did not
+			// change, so the layout resize detection cannot help). Reload the
+			// snapshot so the frozen viewport matches the pane's final size.
+			if a.scroll.IsActive() {
+				a.restartScrollLoad()
+			}
+			return nil
+		})
 	}()
 }
 

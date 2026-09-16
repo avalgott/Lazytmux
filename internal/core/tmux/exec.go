@@ -379,13 +379,6 @@ func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target strin
 	return content, cursorX, cursorY, nil
 }
 
-// CapturePaneANSIRange captures a range of pane content with ANSI escape codes.
-func (c *ExecClient) CapturePaneANSIRange(ctx context.Context, target string, start, end int) (string, error) {
-	return c.runRaw(ctx, "capture-pane", "-t", target, "-ep",
-		"-S", strconv.Itoa(start), "-E", strconv.Itoa(end))
-}
-
-
 // CapturePaneANSIHistory captures from the oldest history line to the
 // current bottom in one operation ("-" is tmux's start-of-history sentinel).
 func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) (string, error) {
