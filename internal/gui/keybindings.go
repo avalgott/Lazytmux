@@ -63,6 +63,15 @@ func (a *App) setupKeybindings() error {
 		return err
 	}
 
+	// Tab / Shift+Tab cycle focus between the sessions panel and the main
+	// preview panel.
+	if err := a.g.SetKeybinding("", gocui.KeyTab, gocui.ModNone, a.cycleFocusHandler); err != nil {
+		return err
+	}
+	if err := a.g.SetKeybinding("", gocui.KeyBacktab, gocui.ModNone, a.cycleFocusHandler); err != nil {
+		return err
+	}
+
 	// 2b. Fullscreen view bindings. The fullscreen main view is Editable,
 	// and gocui dispatches view-specific bindings for special keys before the
 	// Editor, so these intercept Ctrl+D / Ctrl+O / Ctrl+\ / Ctrl+C while every
@@ -104,6 +113,16 @@ func (a *App) setupKeybindings() error {
 		return err
 	}
 	if err := a.g.SetKeybinding("", gocui.MouseWheelDown, gocui.ModNone, a.wheelHandler(3)); err != nil {
+		return err
+	}
+
+	// g/G browse the snapshot in the dashboard preview panel. In fullscreen
+	// the editable main view skips rune view bindings, so the Editor keeps
+	// handling g/G there (scrollEdit).
+	if err := a.g.SetKeybinding("main", 'g', gocui.ModNone, a.previewScrollTopHandler); err != nil {
+		return err
+	}
+	if err := a.g.SetKeybinding("main", 'G', gocui.ModNone, a.previewScrollBottomHandler); err != nil {
 		return err
 	}
 
@@ -151,9 +170,37 @@ func (a *App) cursorMoveHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 		if a.dialog != DialogNone {
 			return nil
 		}
+		if a.focusMain {
+			// j/k/arrows scroll the preview panel when it has focus.
+			a.previewScrollMove(delta)
+			return nil
+		}
 		a.moveCursor(delta)
 		return nil
 	}
+}
+
+// cycleFocusHandler toggles dashboard focus between the sessions list and the
+// main preview panel. Guarded against dialogs (their inputs have their own
+// bindings) and fullscreen (Tab is forwarded to the pane in live mode and
+// must not leak into a focus change in scroll mode).
+func (a *App) cycleFocusHandler(g *gocui.Gui, v *gocui.View) error {
+	if a.dialog != DialogNone || a.fullscreen.IsActive() {
+		return nil
+	}
+	a.focusMain = !a.focusMain
+	a.g.Update(func(*gocui.Gui) error { return nil })
+	return nil
+}
+
+func (a *App) previewScrollTopHandler(g *gocui.Gui, v *gocui.View) error {
+	a.previewScrollTop()
+	return nil
+}
+
+func (a *App) previewScrollBottomHandler(g *gocui.Gui, v *gocui.View) error {
+	a.previewScrollBottom()
+	return nil
 }
 
 func (a *App) openCreateHandler(g *gocui.Gui, v *gocui.View) error {
@@ -259,15 +306,32 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 		delta = 1
 	}
 	return func(g *gocui.Gui, v *gocui.View) error {
-		if !a.fullscreen.IsActive() {
+		if a.fullscreen.IsActive() {
+			if a.scroll.IsActive() {
+				a.scroll.Page(delta)
+				a.g.Update(func(*gocui.Gui) error { return nil })
+				return nil
+			}
+			a.forwardTmuxKey(tmuxKey)
 			return nil
 		}
-		if a.scroll.IsActive() {
-			a.scroll.Page(delta)
-			a.g.Update(func(*gocui.Gui) error { return nil })
+		// Dashboard: the binding is view-scoped to "main", so this only runs
+		// while the preview panel has focus.
+		if a.dialog != DialogNone {
 			return nil
 		}
-		a.forwardTmuxKey(tmuxKey)
+		if !a.previewScroll.IsActive() {
+			a.enterPreviewScroll()
+		}
+		if !a.previewScroll.IsActive() {
+			return nil
+		}
+		a.previewScroll.Page(delta)
+		if a.previewScroll.loaded && a.previewScroll.offsetFromBottom == 0 {
+			a.exitPreviewScroll()
+			return nil
+		}
+		a.g.Update(func(*gocui.Gui) error { return nil })
 		return nil
 	}
 }

@@ -797,3 +797,277 @@ func TestScrollPositionClampedToOne(t *testing.T) {
 
 	assert.Equal(t, 1, ss.position(), "short snapshots must not show position 0 or negative")
 }
+
+// --- Dashboard preview scrolling ---
+
+// loadPreviewSnapshot simulates a completed snapshot load in headless mode
+// (gui.Update never runs there, so the loader goroutine's result is applied
+// via the direct applier with the current seq).
+func loadPreviewSnapshot(t *testing.T, app *App, lines []string) {
+	t.Helper()
+	seq := app.previewScroll.seq
+	app.applyPreviewScrollLoad(seq, lines, nil)
+	require.True(t, app.previewScroll.loaded)
+}
+
+// loadScrollState simulates a completed fullscreen scroll load.
+func loadScrollState(t *testing.T, ss *ScrollState, lines []string) {
+	t.Helper()
+	ss.lines = lines
+	ss.total = len(lines)
+	ss.loaded = true
+	ss.clampOffset()
+}
+
+func TestTabCyclesPanelFocus(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	require.NoError(t, app.layout(app.g))
+	assert.Equal(t, "sessions", app.g.CurrentView().Name())
+
+	require.NoError(t, app.cycleFocusHandler(app.g, nil))
+	assert.True(t, app.focusMain)
+	require.NoError(t, app.layout(app.g))
+	assert.Equal(t, "main", app.g.CurrentView().Name())
+
+	require.NoError(t, app.cycleFocusHandler(app.g, nil))
+	assert.False(t, app.focusMain)
+	require.NoError(t, app.layout(app.g))
+	assert.Equal(t, "sessions", app.g.CurrentView().Name())
+}
+
+func TestTabGuardedInDialogAndFullscreen(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.dialog = DialogCreate
+	require.NoError(t, app.cycleFocusHandler(app.g, nil))
+	assert.False(t, app.focusMain, "Tab must not change focus while a dialog is open")
+
+	app.dialog = DialogNone
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.cycleFocusHandler(app.g, nil))
+	assert.False(t, app.focusMain, "Tab must not change focus in fullscreen")
+}
+
+func TestPreviewFocusedJScrollsInsteadOfMovingCursor(t *testing.T) {
+	p := &fakeProvider{history: 50, paneHeight: 20}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	require.NoError(t, app.layout(app.g))
+	app.focusMain = true
+
+	// j with the preview focused enters scroll mode; the session cursor must
+	// not move.
+	require.NoError(t, app.cursorMoveHandler(1)(app.g, nil))
+	assert.Equal(t, 0, app.cursor)
+	assert.True(t, app.previewScroll.IsActive())
+	assert.Equal(t, "a", app.previewScrollTarget)
+
+	// The loader goroutine requests the history capture.
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.scrollRanges) > 0
+	}, time.Second, 5*time.Millisecond)
+
+	loadPreviewSnapshot(t, app, make([]string, 40))
+	require.NoError(t, app.cursorMoveHandler(-1)(app.g, nil))
+	assert.Equal(t, 1, app.previewScroll.offsetFromBottom)
+	assert.Equal(t, 0, app.cursor, "cursor must not move while the preview is focused")
+}
+
+func TestPreviewScrollViewportRendering(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.focusMain = true
+	require.NoError(t, app.layout(app.g))
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(37, 78)
+
+	lines := make([]string, 40)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line-%02d", i)
+	}
+	loadPreviewSnapshot(t, app, lines)
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	buf := v.Buffer()
+	assert.Contains(t, buf, "line-39", "viewport shows the live bottom")
+	assert.NotContains(t, buf, "line-02", "lines above the viewport are not rendered")
+	assert.Contains(t, v.Title, "scroll 4/40", "title shows the scroll position")
+}
+
+func TestPreviewScrollMoveExitsAtBottom(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	loadPreviewSnapshot(t, app, make([]string, 20))
+
+	app.previewScroll.Move(-1)
+	assert.Equal(t, 1, app.previewScroll.offsetFromBottom)
+	app.previewScroll.Move(1)
+	assert.Equal(t, 0, app.previewScroll.offsetFromBottom)
+
+	// previewScrollMove exits the mode when the live bottom is reached.
+	require.NoError(t, app.cursorMoveHandler(1)(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive())
+	assert.Equal(t, "", app.previewScrollTarget)
+}
+
+func TestPreviewScrollGExits(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	loadPreviewSnapshot(t, app, make([]string, 20))
+
+	app.previewScrollBottom()
+	assert.False(t, app.previewScroll.IsActive())
+}
+
+func TestPreviewScrollTopWhileLoading(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+
+	app.previewScrollTop()
+	assert.True(t, app.previewScroll.pendingTop)
+
+	loadPreviewSnapshot(t, app, make([]string, 20))
+	assert.Equal(t, 10, app.previewScroll.offsetFromBottom, "pending top lands on the oldest line")
+}
+
+func TestPreviewScrollResetsOnSessionChange(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "a"}, {Name: "b"}}
+	app.previewScrollTarget = "a"
+	app.previewScroll.Enter(10, 78)
+	loadPreviewSnapshot(t, app, make([]string, 20))
+	app.focusMain = false
+
+	app.moveCursor(1)
+	assert.False(t, app.previewScroll.IsActive(), "session change returns the preview to live")
+	assert.Equal(t, "", app.previewScrollTarget)
+	assert.Equal(t, 1, app.cursor)
+}
+
+func TestPreviewScrollResetsOnResize(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	loadPreviewSnapshot(t, app, make([]string, 20))
+	require.NoError(t, app.layout(app.g))
+
+	app.lastWidth = 0 // force resize detection
+	require.NoError(t, app.layout(app.g))
+	assert.False(t, app.previewScroll.IsActive(), "resize returns the preview to live")
+}
+
+func TestPreviewScrollResetsWhenTargetDisappears(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}, {Name: "logs"}}
+	app.cursor = 1
+	app.previewScrollTarget = "logs"
+	app.previewScroll.Enter(10, 78)
+	loadPreviewSnapshot(t, app, make([]string, 20))
+
+	app.applySessionRefresh([]session.Info{{Name: "devbox"}}, nil)
+	assert.False(t, app.previewScroll.IsActive(), "target disappearance returns the preview to live")
+	assert.Equal(t, "", app.previewScrollTarget)
+}
+
+func TestPreviewScrollLoadFailureExits(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	seq := app.previewScroll.seq
+
+	app.applyPreviewScrollLoad(seq, nil, assert.AnError)
+	assert.False(t, app.previewScroll.IsActive())
+	require.NotEmpty(t, app.logs)
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "scrollback:")
+}
+
+func TestPreviewScrollStaleLoadIgnored(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	loadPreviewSnapshot(t, app, make([]string, 20))
+
+	app.applyPreviewScrollLoad(app.previewScroll.seq-1, []string{"stale"}, nil)
+	assert.Equal(t, 20, app.previewScroll.total, "stale loads must not overwrite the snapshot")
+}
+
+func TestPageHandlerDashboardDispatch(t *testing.T) {
+	p := &fakeProvider{history: 50, paneHeight: 20}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.focusMain = true
+	require.NoError(t, app.layout(app.g))
+
+	// PgUp with the preview focused enters scroll mode and pages.
+	require.NoError(t, app.pageHandler("PageUp")(app.g, nil))
+	assert.True(t, app.previewScroll.IsActive())
+	loadPreviewSnapshot(t, app, make([]string, 40))
+	app.previewScroll.offsetFromBottom = 0
+	require.NoError(t, app.pageHandler("PageUp")(app.g, nil))
+	// Half the 37-row viewport is 18, but the 40-line snapshot clamps the
+	// offset to maxOffset = 40-37 = 3.
+	assert.Equal(t, 3, app.previewScroll.offsetFromBottom, "PgUp pages half the viewport, clamped to the snapshot top")
+	assert.Equal(t, 0, app.cursor, "paging must not move the session cursor")
+}
+
+func TestPageHandlerFullscreenUntouched(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	app.scroll.Enter(10, 78)
+	loadScrollState(t, app.scroll, make([]string, 20))
+
+	require.NoError(t, app.pageHandler("PageUp")(app.g, nil))
+	assert.Equal(t, 5, app.scroll.offsetFromBottom, "fullscreen paging still works")
+	assert.False(t, app.previewScroll.IsActive(), "dashboard preview scroll must stay inactive")
+}
+
+func TestDialogCloseRestoresFocus(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.focusMain = true
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openCreateHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.cancelDialog(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+	assert.Equal(t, "main", app.g.CurrentView().Name(), "focus returns to the preview panel")
+
+	app.focusMain = false
+	require.NoError(t, app.openRenameHandler(app.g, nil))
+	app.sessions = []session.Info{{Name: "devbox"}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.cancelDialog(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+	assert.Equal(t, "sessions", app.g.CurrentView().Name(), "focus returns to the sessions panel")
+}
+
+func TestEnterFullScreenExitsPreviewScroll(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	loadPreviewSnapshot(t, app, make([]string, 20))
+
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive())
+	assert.True(t, app.fullscreen.IsActive())
+}
+
+func TestPreviewScrollEmptySessionsNoop(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.focusMain = true
+	require.NoError(t, app.cursorMoveHandler(1)(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive())
+}

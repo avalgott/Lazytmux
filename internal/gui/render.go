@@ -105,14 +105,23 @@ func (a *App) renderPreview(v *gocui.View) {
 	}
 }
 
-// renderOptionsBar draws the keybinding hints.
-func renderOptionsBar(v *gocui.View) {
+// renderOptionsBar draws the keybinding hints. While the dashboard preview
+// is being scrolled it shows the scroll hints instead of the usual actions.
+func (a *App) renderOptionsBar(v *gocui.View) {
+	if a.previewScroll.IsActive() {
+		fmt.Fprintln(v, " "+presentation.StyledKey("j/k", "scroll")+"  "+
+			presentation.StyledKey("PgUp/PgDn", "page")+"  "+
+			presentation.StyledKey("g/G", "top/live")+"  "+
+			presentation.StyledKey("Tab", "panels"))
+		return
+	}
 	hints := presentation.StyledKey("j/k", "move") + "  " +
 		presentation.StyledKey("n", "new") + "  " +
 		presentation.StyledKey("d", "delete") + "  " +
 		presentation.StyledKey("r", "rename") + "  " +
 		presentation.StyledKey("Enter", "open") + "  " +
 		presentation.StyledKey("a", "attach") + "  " +
+		presentation.StyledKey("Tab", "panels") + "  " +
 		presentation.StyledKey("q", "quit")
 	fmt.Fprintln(v, " "+hints)
 }

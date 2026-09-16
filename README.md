@@ -79,13 +79,18 @@ lazytmux               # browse with j/k, Enter opens fullscreen, Ctrl+D returns
 
 | Key | Action |
 |-----|--------|
-| `j` / `k`, `↓` / `↑` | Move the selection |
+| `j` / `k`, `↓` / `↑` | Move the selection (or scroll the preview when it has focus) |
+| `Tab` / `Shift+Tab` | Cycle focus between the session list and the preview panel |
 | `n` | New session (create dialog) |
 | `d` | Kill the selected session (asks for confirmation) |
 | `r` | Rename the selected session |
 | `Enter` | Open the selected session in fullscreen (passthrough) |
 | `a` | Attach for real (`tmux attach-session`) |
 | `q` / `Ctrl+C` | Quit |
+
+### Preview panel
+
+Press `Tab` to focus the preview panel (its frame turns cyan). While it has focus, `j`/`k`/`↑`/`↓` scroll line by line, `PgUp`/`PgDn` page by half a screen, `g` jumps to the oldest line, and `G` returns to the live view. The history is a frozen snapshot taken on the first scroll, so output produced while browsing does not shift the view. Moving to a different session, resizing the terminal, or entering fullscreen returns the preview to its live capture. Session actions (`n`, `d`, `r`, `Enter`, `a`, `q`) still work while the preview has focus.
 
 ### Fullscreen mode
 

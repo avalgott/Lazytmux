@@ -119,6 +119,10 @@ func (a *App) layout(g *gocui.Gui) error {
 		if a.scroll.IsActive() {
 			a.scroll.Exit()
 		}
+		if a.previewScroll.IsActive() {
+			a.previewScroll.Exit()
+			a.previewScrollTarget = ""
+		}
 	}
 
 	// Same blanking when entering or leaving fullscreen: the dashboard and
@@ -138,6 +142,20 @@ func (a *App) layout(g *gocui.Gui) error {
 		return err
 	}
 	return a.layoutDialog(g, maxX, maxY)
+}
+
+// setDashboardFocus gives focus to the sessions panel or the main preview
+// panel, depending on the Tab-focus state.
+func (a *App) setDashboardFocus(g *gocui.Gui) error {
+	name := "sessions"
+	if a.focusMain {
+		name = "main"
+	}
+	if _, err := g.SetCurrentView(name); err != nil && !isUnknownView(err) {
+		return err
+	}
+	g.Cursor = false
+	return nil
 }
 
 func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
@@ -179,7 +197,11 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	v3.Wrap = false
 	v3.Editable = false
 	v3.Clear()
-	a.renderPreview(v3)
+	if a.previewScroll.IsActive() {
+		a.renderPreviewScroll(v3)
+	} else {
+		a.renderPreview(v3)
+	}
 
 	// Options bar (bottom, frameless): keybinding hints
 	v4, err := g.SetView("options", l.Options.X0, l.Options.Y0, l.Options.X1, l.Options.Y1, 0)
@@ -188,14 +210,13 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	}
 	v4.Frame = false
 	v4.Clear()
-	renderOptionsBar(v4)
+	a.renderOptionsBar(v4)
 
-	// Focus priority: dialog > sessions panel.
+	// Focus priority: dialog > (Tab-focus state: main panel or sessions).
 	if a.dialog == DialogNone {
-		if _, err := g.SetCurrentView("sessions"); err != nil && !isUnknownView(err) {
+		if err := a.setDashboardFocus(g); err != nil && !isUnknownView(err) {
 			return err
 		}
-		g.Cursor = false
 	}
 	return nil
 }
@@ -413,9 +434,7 @@ func (a *App) closeCreateDialog(g *gocui.Gui) {
 	}
 	g.DeleteView("create-hint")
 	g.Cursor = false
-	if _, err := g.SetCurrentView("sessions"); err != nil && !isUnknownView(err) {
-		_ = err
-	}
+	_ = a.setDashboardFocus(g)
 }
 
 // Rename dialog: single input prefilled with the current session name.
@@ -445,9 +464,7 @@ func (a *App) closeRenameDialog(g *gocui.Gui) {
 	a.renameTarget = ""
 	g.DeleteView("rename-input")
 	g.Cursor = false
-	if _, err := g.SetCurrentView("sessions"); err != nil && !isUnknownView(err) {
-		_ = err
-	}
+	_ = a.setDashboardFocus(g)
 }
 
 // Confirm-delete dialog: asks y/n before killing a session.
@@ -474,9 +491,7 @@ func (a *App) closeConfirmDeleteDialog(g *gocui.Gui) {
 	a.dialog = DialogNone
 	a.confirmTarget = ""
 	g.DeleteView("confirm-delete")
-	if _, err := g.SetCurrentView("sessions"); err != nil && !isUnknownView(err) {
-		_ = err
-	}
+	_ = a.setDashboardFocus(g)
 }
 
 // createFieldViews are the gocui view names of the create dialog fields,

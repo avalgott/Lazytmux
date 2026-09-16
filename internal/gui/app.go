@@ -54,7 +54,13 @@ type App struct {
 	fullscreen *FullScreenState
 	scroll     *ScrollState
 	editor     *inputEditor // fullscreen key-forwarding editor (lazily created)
-	dialog     DialogKind
+	// Dashboard preview scrolling: a second ScrollState instance (same frozen
+	// snapshot model as fullscreen scroll mode) plus the session it belongs
+	// to and the Tab-focus state.
+	previewScroll       *ScrollState
+	previewScrollTarget string
+	focusMain           bool // dashboard focus: true = main preview panel, false = sessions
+	dialog              DialogKind
 	// createField is the active input field of the create dialog
 	// (0=name, 1=directory, 2=command).
 	createField    int
@@ -110,11 +116,12 @@ func NewAppHeadless(svc session.Provider, width, height int) (*App, error) {
 
 func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 	app := &App{
-		g:          g,
-		svc:        svc,
-		preview:    &PreviewCache{},
-		fullscreen: &FullScreenState{},
-		scroll:     &ScrollState{},
+		g:             g,
+		svc:           svc,
+		preview:       &PreviewCache{},
+		fullscreen:    &FullScreenState{},
+		scroll:        &ScrollState{},
+		previewScroll: &ScrollState{},
 	}
 
 	g.Highlight = true
@@ -263,6 +270,22 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 			}
 		}
 	}
+
+	// The preview snapshot is tied to a session; when the selection no longer
+	// points at it (killed, renamed, or the list reshuffled), return to the
+	// live capture. A name comparison keeps this a no-op during the regular
+	// 300ms refresh ticks while browsing.
+	if a.previewScroll.IsActive() {
+		cur := ""
+		if sess := a.currentSession(); sess != nil {
+			cur = sess.Name
+		}
+		if cur != a.previewScrollTarget {
+			a.previewScroll.Exit()
+			a.previewScrollTarget = ""
+			a.preview.Invalidate()
+		}
+	}
 }
 
 // enterFullScreen switches the UI to fullscreen passthrough mode for the
@@ -273,6 +296,8 @@ func (a *App) enterFullScreen() {
 		return
 	}
 	a.scroll.Exit()
+	a.previewScroll.Exit()
+	a.previewScrollTarget = ""
 	a.preview.Invalidate()
 	a.fullscreen.Enter(sess.Name)
 }
@@ -307,13 +332,18 @@ func (a *App) clampCursor() {
 }
 
 // moveCursor moves the selection by delta and marks the preview stale so it
-// refreshes for the newly selected session.
+// refreshes for the newly selected session. Moving to a different session
+// returns the preview panel to its live capture.
 func (a *App) moveCursor(delta int) {
 	if len(a.sessions) == 0 {
 		return
 	}
 	a.cursor += delta
 	a.clampCursor()
+	if a.previewScroll.IsActive() {
+		a.previewScroll.Exit()
+		a.previewScrollTarget = ""
+	}
 	a.preview.Invalidate()
 }
 

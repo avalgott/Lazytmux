@@ -175,63 +175,80 @@ func (a *App) enterScrollMode() {
 	a.restartScrollLoad()
 }
 
-// restartScrollLoad (re)loads the scroll snapshot in a goroutine: the single
-// atomic tmux capture runs outside the event loop, and only the latest load
-// applies. Called on entry and again when a pending pane resize completes,
-// so the frozen viewport always matches the pane's final geometry.
+// restartScrollLoad (re)loads the fullscreen scroll snapshot. Called on entry
+// and again when a pending pane resize completes, so the frozen viewport
+// always matches the pane's final geometry.
 func (a *App) restartScrollLoad() {
-	target := a.fullscreen.Target()
-	if target == "" || !a.scroll.IsActive() {
+	a.restartScrollLoadState(a.scroll, a.fullscreen.Target(), a.applyScrollLoad)
+}
+
+// restartScrollLoadState (re)loads a scrollback snapshot for a ScrollState
+// and target pair in a goroutine; the single atomic tmux capture runs
+// outside the event loop, and only the latest load applies. apply is the
+// mode-specific event-loop applier.
+func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(seq int64, lines []string, loadErr error)) {
+	if target == "" || !ss.IsActive() {
 		return
 	}
-	width := a.scroll.width
+	width := ss.width
 
-	a.scroll.seq++
-	seq := a.scroll.seq
+	ss.seq++
+	seq := ss.seq
 	go func() {
 		lines, err := fetchScrollbackLines(a.svc, target, width)
 		if err != nil {
-			a.finishScrollLoad(seq, nil, err)
+			a.finishScrollLoadFor(apply, seq, nil, err)
 			return
 		}
-		a.finishScrollLoad(seq, lines, nil)
+		a.finishScrollLoadFor(apply, seq, lines, nil)
 	}()
 }
 
-// finishScrollLoad applies the snapshot load (or its failure) on the event
-// loop. A failed load leaves scroll mode instead of stranding the user in a
-// perpetual "loading" state, and records the reason in the dashboard log.
-func (a *App) finishScrollLoad(seq int64, lines []string, loadErr error) {
+// finishScrollLoadFor applies a snapshot load (or its failure) on the event
+// loop via the given mode-specific applier.
+func (a *App) finishScrollLoadFor(apply func(seq int64, lines []string, loadErr error), seq int64, lines []string, loadErr error) {
 	a.g.Update(func(*gocui.Gui) error {
-		a.applyScrollLoad(seq, lines, loadErr)
+		apply(seq, lines, loadErr)
 		return nil
 	})
 }
 
-// applyScrollLoad is the event-loop half of finishScrollLoad, split out so
-// tests can drive it directly (headless mode never runs gui.Update).
+// applyScrollLoad is the fullscreen event-loop applier, split out so tests
+// can drive it directly (headless mode never runs gui.Update). A failed load
+// leaves scroll mode instead of stranding the user in a perpetual "loading"
+// state, and records the reason in the dashboard log.
 func (a *App) applyScrollLoad(seq int64, lines []string, loadErr error) {
-	if seq != a.scroll.seq {
-		return // superseded
+	if err := a.applyScrollLoadState(a.scroll, seq, lines, loadErr); err != nil {
+		a.setError(fmt.Sprintf("scrollback: %v", err))
+		a.exitScrollMode()
+	}
+}
+
+// applyScrollLoadState applies a snapshot load to the given ScrollState.
+// Returns non-nil when a load failed for an active scroll state (the caller
+// exits the mode).
+func (a *App) applyScrollLoadState(ss *ScrollState, seq int64, lines []string, loadErr error) error {
+	if seq != ss.seq {
+		return nil // superseded
 	}
 	if loadErr != nil {
-		if a.scroll.IsActive() {
-			a.setError(fmt.Sprintf("scrollback: %v", loadErr))
-			a.exitScrollMode()
+		if ss.IsActive() {
+			return loadErr
 		}
-		return
+		return nil
 	}
-	if a.scroll.IsActive() {
-		a.scroll.lines = lines
-		a.scroll.total = len(lines)
-		a.scroll.loaded = true
-		if a.scroll.pendingTop {
-			a.scroll.pendingTop = false
-			a.scroll.offsetFromBottom = a.scroll.maxOffset()
+	if ss.IsActive() {
+		ss.lines = lines
+		ss.total = len(lines)
+		ss.loaded = true
+		if ss.pendingTop {
+			ss.pendingTop = false
+			ss.offsetFromBottom = ss.maxOffset()
 		} else {
-			a.scroll.clampOffset()
+			ss.clampOffset()
 		}
 	}
+	return nil
 }
 
 // exitScrollMode returns to the live fullscreen view.
@@ -294,4 +311,116 @@ func (a *App) scrollStatusText() string {
 		presentation.StyledKey("pgup/pgdn", "page") + "  " +
 		presentation.StyledKey("g/G", "top/bottom") + "  " +
 		presentation.StyledKey("esc", "live")
+}
+
+// enterPreviewScroll activates scrollback browsing on the dashboard: the
+// whole pane history of the selected session is snapshotted once and browsed
+// in memory (the same frozen-snapshot model as fullscreen scroll mode).
+func (a *App) enterPreviewScroll() {
+	if a.fullscreen.IsActive() || a.previewScroll.IsActive() || a.dialog != DialogNone {
+		return
+	}
+	sess := a.currentSession()
+	if sess == nil {
+		return
+	}
+	v, err := a.g.View("main")
+	if err != nil {
+		return
+	}
+	viewH := v.InnerHeight()
+	width := v.InnerWidth()
+	if viewH < 1 {
+		viewH = 1
+	}
+	if width < 1 {
+		width = 1
+	}
+	a.previewScrollTarget = sess.Name
+	a.previewScroll.Enter(viewH, width)
+	a.restartPreviewScrollLoad()
+}
+
+// exitPreviewScroll returns the preview panel to its live capture.
+func (a *App) exitPreviewScroll() {
+	a.previewScroll.Exit()
+	a.previewScrollTarget = ""
+	a.preview.Invalidate()
+	a.g.Update(func(*gocui.Gui) error { return nil })
+}
+
+func (a *App) restartPreviewScrollLoad() {
+	a.restartScrollLoadState(a.previewScroll, a.previewScrollTarget, a.applyPreviewScrollLoad)
+}
+
+// applyPreviewScrollLoad is the dashboard event-loop applier; a failed load
+// logs the reason and returns the panel to the live capture.
+func (a *App) applyPreviewScrollLoad(seq int64, lines []string, loadErr error) {
+	if err := a.applyScrollLoadState(a.previewScroll, seq, lines, loadErr); err != nil {
+		a.setError(fmt.Sprintf("scrollback: %v", err))
+		a.exitPreviewScroll()
+	}
+}
+
+// previewScrollMove scrolls the dashboard preview snapshot by delta lines
+// (positive = towards newer content). The first gesture enters the mode;
+// reaching the live bottom returns to the live capture.
+func (a *App) previewScrollMove(delta int) {
+	if a.fullscreen.IsActive() || a.dialog != DialogNone {
+		return
+	}
+	if !a.previewScroll.IsActive() {
+		a.enterPreviewScroll()
+	}
+	if !a.previewScroll.IsActive() {
+		return // no session, or the main view is missing
+	}
+	a.previewScroll.Move(delta)
+	if a.previewScroll.loaded && a.previewScroll.offsetFromBottom == 0 {
+		a.exitPreviewScroll()
+		return
+	}
+	a.g.Update(func(*gocui.Gui) error { return nil })
+}
+
+// previewScrollTop jumps to the oldest line (g). A top request made while
+// the snapshot loads is honored by the load callback (pendingTop).
+func (a *App) previewScrollTop() {
+	if a.fullscreen.IsActive() || a.dialog != DialogNone {
+		return
+	}
+	if !a.previewScroll.IsActive() {
+		a.enterPreviewScroll()
+	}
+	if !a.previewScroll.IsActive() {
+		return
+	}
+	a.previewScroll.Top()
+	a.g.Update(func(*gocui.Gui) error { return nil })
+}
+
+// previewScrollBottom returns to the live capture (G).
+func (a *App) previewScrollBottom() {
+	if a.fullscreen.IsActive() || a.dialog != DialogNone {
+		return
+	}
+	if a.previewScroll.IsActive() {
+		a.exitPreviewScroll()
+	}
+}
+
+// renderPreviewScroll draws the frozen snapshot viewport into the dashboard
+// main view; the Title shows the scroll position.
+func (a *App) renderPreviewScroll(v *gocui.View) {
+	name := a.previewScrollTarget
+	if !a.previewScroll.loaded {
+		v.Title = fmt.Sprintf(" %s ", name)
+		fmt.Fprintln(v, " Loading scrollback...")
+		return
+	}
+	v.Title = fmt.Sprintf(" %s — scroll %d/%d ", name, a.previewScroll.position(), a.previewScroll.total)
+	lines := a.previewScroll.viewport()
+	if len(lines) > 0 {
+		fmt.Fprint(v, strings.Join(lines, "\n"))
+	}
 }
