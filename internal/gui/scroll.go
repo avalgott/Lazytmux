@@ -9,7 +9,6 @@ import (
 	"github.com/jesseduffield/gocui"
 
 	"github.com/avalgott/Lazytmux/internal/gui/presentation"
-	"github.com/avalgott/Lazytmux/internal/session"
 )
 
 // ScrollState tracks scrollback browsing in fullscreen mode. Adapted from
@@ -199,7 +198,7 @@ func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(
 	ss.seq++
 	seq := ss.seq
 	go func() {
-		lines, paneH, err := fetchScrollbackLines(a.svc, target, width)
+		lines, paneH, err := a.fetchScrollSnapshot(target, width)
 		if err != nil {
 			a.finishScrollLoadFor(apply, seq, nil, 0, err)
 			return
@@ -284,17 +283,41 @@ func (a *App) exitScrollMode() {
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }
 
-// fetchScrollbackLines captures the whole pane history (one atomic tmux
-// operation, oldest sentinel to current bottom) and truncates lines to the
-// given width. The pane height rides along so callers can tell a snapshot
-// that has no history from one that merely looks short. Pure helper: no App
-// state is touched, so it is safe to run from a goroutine.
-func fetchScrollbackLines(svc session.Provider, target string, width int) ([]string, int, error) {
-	preview, err := svc.CaptureScrollback(context.Background(), target)
+// fetchScrollSnapshot builds the scrollback snapshot for a target: tmux's
+// real pane history when it has any, else the synthetic buffer accumulated
+// from observed captures (alternate-screen panes keep no tmux history).
+// Lines are truncated to the given width. Safe to run from a goroutine.
+func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, error) {
+	preview, err := a.svc.CaptureScrollback(context.Background(), target)
 	if err != nil {
 		return nil, 0, err
 	}
-	return splitScrollback(preview.Content, width), preview.PaneHeight, nil
+	lines := splitScrollback(preview.Content, width)
+	if len(lines) > preview.PaneHeight {
+		return lines, preview.PaneHeight, nil // real tmux history
+	}
+	// No tmux history: fall back to the synthetic buffer. A direct map
+	// lookup — bufferFor would create an empty buffer on every attempt.
+	if b := a.buffers[target]; b != nil {
+		if snap := b.Snapshot(); len(snap) > preview.PaneHeight {
+			return truncateLines(snap, width), preview.PaneHeight, nil
+		}
+	}
+	return lines, preview.PaneHeight, nil // nothing to browse — hint path
+}
+
+// truncateLines clips each line to the given width (same rule as
+// splitScrollback, for already-split buffer lines).
+func truncateLines(lines []string, width int) []string {
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		if ansi.StringWidth(line) > width {
+			out[i] = ansi.Truncate(line, width, "")
+		} else {
+			out[i] = line
+		}
+	}
+	return out
 }
 
 // splitScrollback splits raw capture output into lines and truncates them to

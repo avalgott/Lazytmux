@@ -1373,3 +1373,47 @@ func TestCaptureCompletionFeedsBuffer(t *testing.T) {
 
 	assert.Equal(t, []string{"live", "streamed"}, app.bufferFor("devbox").Snapshot())
 }
+
+// --- Scroll snapshot sourcing ---
+
+func TestScrollSnapshotFallsBackToBufferForAltScreenPane(t *testing.T) {
+	p := &fakeProvider{paneHeight: 5}
+	app := newTestApp(t, p)
+	app.feedBuffer("devbox", strings.Join([]string{"h1", "h2", "h3", "h4", "h5", "h6", "h7"}, "\n"))
+
+	lines, paneH, err := app.fetchScrollSnapshot("devbox", 80)
+	require.NoError(t, err)
+	assert.Equal(t, 5, paneH, "pane height still reported for the noHistory check")
+	assert.Equal(t, []string{"h1", "h2", "h3", "h4", "h5", "h6", "h7"}, lines)
+}
+
+func TestScrollSnapshotPrefersRealHistory(t *testing.T) {
+	p := &fakeProvider{history: 30, paneHeight: 5}
+	app := newTestApp(t, p)
+	app.feedBuffer("devbox", "buffered-1\nbuffered-2")
+
+	lines, _, err := app.fetchScrollSnapshot("devbox", 80)
+	require.NoError(t, err)
+	assert.Contains(t, lines, "line 0", "tmux history wins over the synthetic buffer")
+	assert.NotContains(t, lines, "buffered-1")
+}
+
+func TestScrollSnapshotZeroHistoryWithoutBuffer(t *testing.T) {
+	p := &fakeProvider{paneHeight: 5}
+	app := newTestApp(t, p)
+
+	lines, paneH, err := app.fetchScrollSnapshot("devbox", 80)
+	require.NoError(t, err)
+	assert.Len(t, lines, 5)
+	assert.Equal(t, 5, paneH, "an empty buffer keeps the zero-history signal")
+}
+
+func TestScrollSnapshotTruncatesBufferToWidth(t *testing.T) {
+	p := &fakeProvider{paneHeight: 2}
+	app := newTestApp(t, p)
+	app.feedBuffer("devbox", "short\n"+strings.Repeat("w", 100)+"\ntail")
+
+	lines, _, err := app.fetchScrollSnapshot("devbox", 20)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"short", strings.Repeat("w", 20), "tail"}, lines)
+}
