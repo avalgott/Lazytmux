@@ -55,9 +55,20 @@ type Client interface {
 
 	// CapturePaneANSIHistory captures the whole pane history from tmux's
 	// oldest-history sentinel ("-S -") to the current bottom in one
-	// operation. Both bounds are resolved atomically by tmux, so a pane
-	// that scrolls concurrently cannot produce a partial snapshot.
-	CapturePaneANSIHistory(ctx context.Context, target string) (string, error)
+	// operation, plus the pane height from the same atomic invocation. Both
+	// bounds are resolved atomically by tmux, so a pane that scrolls
+	// concurrently cannot produce a partial snapshot. The height lets callers
+	// detect alternate-screen panes, whose capture contains nothing beyond
+	// the visible screen.
+	CapturePaneANSIHistory(ctx context.Context, target string) (content string, paneHeight int, err error)
+
+	// PaneInputFlags reports the pane's input mode: alternate screen active,
+	// mouse tracking enabled, and the 0-based pane cursor position.
+	PaneInputFlags(ctx context.Context, target string) (altOn, mouseAny bool, cursorX, cursorY int, err error)
+
+	// SendMouseWheel sends a mouse wheel event to the pane's input stream
+	// as SGR mouse escape sequences (0-based pane cursor coordinates).
+	SendMouseWheel(ctx context.Context, target string, up bool, x, y int) error
 
 	// SendKeys sends key sequences to a tmux target.
 	// Keys are interpreted as tmux key names (e.g., "Enter", "Space").

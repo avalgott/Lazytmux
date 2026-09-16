@@ -374,3 +374,40 @@ func TestShellWrapperExecutesUnderFish(t *testing.T) {
 	assert.Contains(t, string(out), "WRAPPER-RAN")
 	assert.Contains(t, string(out), "SHELL-ALIVE", "the relaunched fish shell must run")
 }
+
+func TestServiceCaptureScrollbackSetsPaneHeight(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.Captured["devbox"] = "line1\nline2\n"
+	mock.PaneHeight = 42
+
+	svc := NewService(mock)
+	preview, err := svc.CaptureScrollback(context.Background(), "devbox")
+	require.NoError(t, err)
+	assert.Equal(t, "line1\nline2\n", preview.Content)
+	assert.Equal(t, 42, preview.PaneHeight, "the pane height rides along with the snapshot")
+}
+
+func TestServicePaneInputFlags(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.Messages["devbox#flags"] = "1 1 12 34"
+
+	svc := NewService(mock)
+	alt, mouse, cx, cy, err := svc.PaneInputFlags(context.Background(), "devbox")
+	require.NoError(t, err)
+	assert.True(t, alt)
+	assert.True(t, mouse)
+	assert.Equal(t, 12, cx)
+	assert.Equal(t, 34, cy)
+}
+
+func TestServiceForwardMouseWheel(t *testing.T) {
+	mock := tmux.NewMockClient()
+
+	svc := NewService(mock)
+	require.NoError(t, svc.ForwardMouseWheel(context.Background(), "devbox", true, 10, 5))
+	require.NoError(t, svc.ForwardMouseWheel(context.Background(), "devbox", false, 0, 0))
+
+	require.Len(t, mock.WheelEvents, 2)
+	assert.Equal(t, tmux.WheelEvent{Target: "devbox", Up: true, X: 10, Y: 5}, mock.WheelEvents[0])
+	assert.Equal(t, tmux.WheelEvent{Target: "devbox", Up: false, X: 0, Y: 0}, mock.WheelEvents[1])
+}

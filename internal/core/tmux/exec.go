@@ -380,9 +380,100 @@ func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target strin
 }
 
 // CapturePaneANSIHistory captures from the oldest history line to the
-// current bottom in one operation ("-" is tmux's start-of-history sentinel).
-func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) (string, error) {
-	return c.runRaw(ctx, "capture-pane", "-t", target, "-ep", "-S", "-")
+// current bottom in one operation ("-" is tmux's start-of-history sentinel),
+// plus the pane's height from the same atomic invocation. The height
+// distinguishes real scrollback from a snapshot that contains nothing but
+// the visible screen (alternate-screen panes such as Claude Code have no
+// saved history at all).
+func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) (string, int, error) {
+	ctx2, cancel := context.WithTimeout(ctx, defaultTimeout)
+	defer cancel()
+
+	args := []string{"capture-pane", "-t", target, "-ep", "-S", "-", ";",
+		"display-message", "-t", target, "-p", "#{pane_height}"}
+	fullArgs := c.prependSocket(args)
+	cmd := exec.CommandContext(ctx2, c.tmuxBin, fullArgs...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	c.logCmd("CapturePaneANSIHistory", fullArgs, string(out), err)
+	if err != nil {
+		return "", 0, fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return splitPaneHeightLine(string(out))
+}
+
+// PaneInputFlags reports the pane's input mode in one display-message call:
+// whether the alternate screen is active, whether the program has mouse
+// tracking enabled, and the pane cursor position (0-based).
+func (c *ExecClient) PaneInputFlags(ctx context.Context, target string) (bool, bool, int, int, error) {
+	out, err := c.run(ctx, "display-message", "-t", target, "-p", "-F",
+		"#{alternate_on} #{mouse_any_flag} #{cursor_x} #{cursor_y}")
+	if err != nil {
+		return false, false, 0, 0, err
+	}
+	return parseInputFlags(out)
+}
+
+// SendMouseWheel sends a mouse wheel event to the target pane's input stream
+// as SGR mouse escape sequences (press + release). A program with mouse
+// tracking enabled reads them as a real wheel event.
+func (c *ExecClient) SendMouseWheel(ctx context.Context, target string, up bool, x, y int) error {
+	_, err := c.run(ctx, "send-keys", "-l", "-t", target, "--", sgrWheelPair(up, x, y))
+	return err
+}
+
+// splitPaneHeightLine splits the combined output of
+// "capture-pane -ep -S - ; display-message -p #{pane_height}" into the raw
+// capture content (its trailing newline preserved — capture output terminates
+// with one) and the pane height.
+func splitPaneHeightLine(out string) (string, int, error) {
+	s := strings.TrimRight(out, "\n")
+	idx := strings.LastIndex(s, "\n")
+	if idx < 0 {
+		return "", 0, fmt.Errorf("capture output missing pane-height line")
+	}
+	h, err := strconv.Atoi(strings.TrimSpace(s[idx+1:]))
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid pane height %q: %w", s[idx+1:], err)
+	}
+	return s[:idx+1], h, nil
+}
+
+// parseInputFlags parses the display-message output of
+// "#{alternate_on} #{mouse_any_flag} #{cursor_x} #{cursor_y}".
+func parseInputFlags(s string) (altOn, mouseAny bool, cx, cy int, err error) {
+	fields := strings.Fields(s)
+	if len(fields) != 4 {
+		return false, false, 0, 0, fmt.Errorf("unexpected input flags %q", s)
+	}
+	var nums [4]int
+	for i, f := range fields {
+		n, e := strconv.Atoi(f)
+		if e != nil {
+			return false, false, 0, 0, fmt.Errorf("invalid input flags %q: %w", s, e)
+		}
+		nums[i] = n
+	}
+	return nums[0] == 1, nums[1] == 1, nums[2], nums[3], nil
+}
+
+// sgrWheelPair builds the SGR mouse escape sequences for one wheel click:
+// a press and a release. Coordinates are converted from tmux's 0-based pane
+// cursor to SGR's 1-based scheme, clamped to at least 1.
+func sgrWheelPair(up bool, x, y int) string {
+	b := 64
+	if !up {
+		b = 65
+	}
+	cx, cy := x+1, y+1
+	if cx < 1 {
+		cx = 1
+	}
+	if cy < 1 {
+		cy = 1
+	}
+	return fmt.Sprintf("\x1b[<%d;%d;%dM\x1b[<%d;%d;%dm", b, cx, cy, b, cx, cy)
 }
 
 func (c *ExecClient) SendKeys(ctx context.Context, target string, keys ...string) error {

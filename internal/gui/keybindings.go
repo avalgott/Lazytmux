@@ -342,11 +342,20 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 }
 
 // wheelHandler handles the mouse wheel: in fullscreen it enters scroll mode
-// (if needed) and scrolls; on the dashboard it scrolls the preview panel.
+// (if needed) and scrolls — unless the pane's program runs in the alternate
+// screen with mouse tracking (e.g. Claude Code), in which case the wheel is
+// forwarded to the pane as a real mouse event so the program scrolls its own
+// history. On the dashboard the wheel scrolls the preview panel.
 func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 	return func(g *gocui.Gui, v *gocui.View) error {
 		if a.fullscreen.IsActive() {
 			if !a.scroll.IsActive() {
+				target := a.fullscreen.Target()
+				alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
+				if err == nil && alt && mouse {
+					_ = a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy)
+					return nil
+				}
 				a.enterScrollMode()
 			}
 			a.scroll.Move(delta)

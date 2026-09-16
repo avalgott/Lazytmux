@@ -270,6 +270,11 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 			presentation.StyledKey("ctrl+o", "eof")+"  "+
 			presentation.StyledKey("ctrl+v", "scroll")+"  "+
 			presentation.StyledKey("ctrl+\\", "back"))
+		// The pane's program keeps its own scrollback (alternate screen):
+		// the wheel goes to the program, lazytmux has nothing to browse.
+		if a.fullscreenNoScrollback {
+			fmt.Fprint(v2, "  "+presentation.Dim+"no scrollback"+presentation.Reset)
+		}
 	}
 
 	g.Cursor = true

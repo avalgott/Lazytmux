@@ -173,19 +173,134 @@ func TestPrependSocket(t *testing.T) {
 func TestCaptureHistoryPreservesBlankLines(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "fake-tmux")
-	// Prints two blank lines, "x", then two blank lines. The leading and
-	// trailing blanks are significant for the snapshot's line accounting.
-	script := "#!/bin/sh\nfor f in \"$@\"; do :; done\necho; echo; echo x; echo; echo\n"
+	// Prints two blank lines, "x", two blank lines, then the pane-height line
+	// that the display-message half of the combined command produces. The
+	// leading and trailing blanks are significant for the snapshot's line
+	// accounting.
+	script := "#!/bin/sh\nfor f in \"$@\"; do :; done\necho; echo; echo x; echo; echo; echo 63\n"
 	require.NoError(t, os.WriteFile(fake, []byte(script), 0o755))
 
 	c := &ExecClient{tmuxBin: fake}
 
-	content, err := c.CapturePaneANSIHistory(context.Background(), "s")
+	content, paneH, err := c.CapturePaneANSIHistory(context.Background(), "s")
 	require.NoError(t, err)
 	assert.Equal(t, "\n\nx\n\n\n", content, "history captures must preserve blank lines")
+	assert.Equal(t, 63, paneH, "the trailing pane-height line is parsed separately")
 
 	trimmed, err := c.run(context.Background(), "display-message", "-p", "x")
 	require.NoError(t, err)
-	assert.Equal(t, "\n\nx\n\n\n", content, "sanity: raw output unchanged")
-	assert.Equal(t, "x", trimmed, "run() still trims for parsed commands")
+	assert.Equal(t, "x\n\n\n63", trimmed, "run() trims the fixture's surrounding whitespace")
+}
+
+func TestSplitPaneHeightLine(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		in      string
+		content string
+		height  int
+		wantErr bool
+	}{
+		{
+			name:    "content with trailing height line",
+			in:      "line1\nline2\n63\n",
+			content: "line1\nline2\n",
+			height:  63,
+		},
+		{
+			name:    "blank lines preserved",
+			in:      "\n\nx\n\n\n63\n",
+			content: "\n\nx\n\n\n",
+			height:  63,
+		},
+		{
+			name:    "no height line",
+			in:      "only content\n",
+			wantErr: true,
+		},
+		{
+			name:    "non-numeric height",
+			in:      "content\nabc\n",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, h, err := splitPaneHeightLine(tt.in)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.content, content)
+			assert.Equal(t, tt.height, h)
+		})
+	}
+}
+
+func TestParseInputFlags(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		in      string
+		alt     bool
+		mouse   bool
+		cx, cy  int
+		wantErr bool
+	}{
+		{name: "alt screen with mouse", in: "1 1 12 34", alt: true, mouse: true, cx: 12, cy: 34},
+		{name: "plain pane", in: "0 0 0 0", alt: false, mouse: false, cx: 0, cy: 0},
+		{name: "alt without mouse", in: "1 0 5 9", alt: true, mouse: false, cx: 5, cy: 9},
+		{name: "empty", in: "", wantErr: true},
+		{name: "too few fields", in: "1 1", wantErr: true},
+		{name: "non-numeric", in: "x 1 2 3", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			alt, mouse, cx, cy, err := parseInputFlags(tt.in)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.alt, alt)
+			assert.Equal(t, tt.mouse, mouse)
+			assert.Equal(t, tt.cx, cx)
+			assert.Equal(t, tt.cy, cy)
+		})
+	}
+}
+
+func TestSGRWheelPair(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		up   bool
+		x, y int
+		want string
+	}{
+		{
+			name: "wheel up at 0-based coords",
+			up:   true,
+			x:    10, y: 5,
+			want: "\x1b[<64;11;6M\x1b[<64;11;6m",
+		},
+		{
+			name: "wheel down at origin",
+			up:   false,
+			x:    0, y: 0,
+			want: "\x1b[<65;1;1M\x1b[<65;1;1m",
+		},
+		{
+			name: "negative coords clamp to one",
+			up:   true,
+			x:    -5, y: -3,
+			want: "\x1b[<64;1;1M\x1b[<64;1;1m",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sgrWheelPair(tt.up, tt.x, tt.y))
+		})
+	}
 }

@@ -190,7 +190,7 @@ func (a *App) restartScrollLoad() {
 // and target pair in a goroutine; the single atomic tmux capture runs
 // outside the event loop, and only the latest load applies. apply is the
 // mode-specific event-loop applier.
-func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(seq int64, lines []string, loadErr error)) {
+func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(seq int64, lines []string, paneH int, loadErr error)) {
 	if target == "" || !ss.IsActive() {
 		return
 	}
@@ -199,20 +199,20 @@ func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(
 	ss.seq++
 	seq := ss.seq
 	go func() {
-		lines, err := fetchScrollbackLines(a.svc, target, width)
+		lines, paneH, err := fetchScrollbackLines(a.svc, target, width)
 		if err != nil {
-			a.finishScrollLoadFor(apply, seq, nil, err)
+			a.finishScrollLoadFor(apply, seq, nil, 0, err)
 			return
 		}
-		a.finishScrollLoadFor(apply, seq, lines, nil)
+		a.finishScrollLoadFor(apply, seq, lines, paneH, nil)
 	}()
 }
 
 // finishScrollLoadFor applies a snapshot load (or its failure) on the event
 // loop via the given mode-specific applier.
-func (a *App) finishScrollLoadFor(apply func(seq int64, lines []string, loadErr error), seq int64, lines []string, loadErr error) {
+func (a *App) finishScrollLoadFor(apply func(seq int64, lines []string, paneH int, loadErr error), seq int64, lines []string, paneH int, loadErr error) {
 	a.g.Update(func(*gocui.Gui) error {
-		apply(seq, lines, loadErr)
+		apply(seq, lines, paneH, loadErr)
 		return nil
 	})
 }
@@ -220,39 +220,61 @@ func (a *App) finishScrollLoadFor(apply func(seq int64, lines []string, loadErr 
 // applyScrollLoad is the fullscreen event-loop applier, split out so tests
 // can drive it directly (headless mode never runs gui.Update). A failed load
 // leaves scroll mode instead of stranding the user in a perpetual "loading"
-// state, and records the reason in the dashboard log.
-func (a *App) applyScrollLoad(seq int64, lines []string, loadErr error) {
-	if err := a.applyScrollLoadState(a.scroll, seq, lines, loadErr); err != nil {
+// state, and records the reason in the dashboard log. A snapshot with no
+// history beyond the visible screen (alternate-screen panes like Claude Code
+// have no saved history at all) leaves scroll mode too, with the
+// no-scrollback hint.
+func (a *App) applyScrollLoad(seq int64, lines []string, paneH int, loadErr error) {
+	applied, noHistory, err := a.applyScrollLoadState(a.scroll, seq, lines, paneH, loadErr)
+	if err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))
 		a.exitScrollMode()
+		return
 	}
+	if !applied {
+		return // superseded or the mode already exited — leave the hint alone
+	}
+	if noHistory {
+		a.fullscreenNoScrollback = true
+		a.exitScrollMode()
+		return
+	}
+	a.fullscreenNoScrollback = false
 }
 
 // applyScrollLoadState applies a snapshot load to the given ScrollState.
+// applied reports whether the load landed on the active state (a superseded
+// load or one landing after the mode exited changes nothing). noHistory
+// reports a snapshot that contains nothing beyond the visible screen (no
+// more lines than the pane height): such a snapshot has nothing to browse.
 // Returns non-nil when a load failed for an active scroll state (the caller
 // exits the mode).
-func (a *App) applyScrollLoadState(ss *ScrollState, seq int64, lines []string, loadErr error) error {
+func (a *App) applyScrollLoadState(ss *ScrollState, seq int64, lines []string, paneH int, loadErr error) (applied, noHistory bool, err error) {
 	if seq != ss.seq {
-		return nil // superseded
+		return false, false, nil // superseded
 	}
 	if loadErr != nil {
 		if ss.IsActive() {
-			return loadErr
+			return false, false, loadErr
 		}
-		return nil
+		return false, false, nil
 	}
-	if ss.IsActive() {
-		ss.lines = lines
-		ss.total = len(lines)
-		ss.loaded = true
-		if ss.pendingTop {
-			ss.pendingTop = false
-			ss.offsetFromBottom = ss.maxOffset()
-		} else {
-			ss.clampOffset()
-		}
+	if !ss.IsActive() {
+		return false, false, nil
 	}
-	return nil
+	if len(lines) <= paneH {
+		return true, true, nil
+	}
+	ss.lines = lines
+	ss.total = len(lines)
+	ss.loaded = true
+	if ss.pendingTop {
+		ss.pendingTop = false
+		ss.offsetFromBottom = ss.maxOffset()
+	} else {
+		ss.clampOffset()
+	}
+	return true, false, nil
 }
 
 // exitScrollMode returns to the live fullscreen view.
@@ -264,14 +286,15 @@ func (a *App) exitScrollMode() {
 
 // fetchScrollbackLines captures the whole pane history (one atomic tmux
 // operation, oldest sentinel to current bottom) and truncates lines to the
-// given width. Pure helper: no App state is touched, so it is safe to run
-// from a goroutine.
-func fetchScrollbackLines(svc session.Provider, target string, width int) ([]string, error) {
+// given width. The pane height rides along so callers can tell a snapshot
+// that has no history from one that merely looks short. Pure helper: no App
+// state is touched, so it is safe to run from a goroutine.
+func fetchScrollbackLines(svc session.Provider, target string, width int) ([]string, int, error) {
 	preview, err := svc.CaptureScrollback(context.Background(), target)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return splitScrollback(preview.Content, width), nil
+	return splitScrollback(preview.Content, width), preview.PaneHeight, nil
 }
 
 // splitScrollback splits raw capture output into lines and truncates them to
@@ -366,9 +389,23 @@ func (a *App) restartPreviewScrollLoad() {
 // gesture returns to live. Downward gestures while inactive are already
 // filtered before entering, so no expensive load can be started just to
 // exit again.
-func (a *App) applyPreviewScrollLoad(seq int64, lines []string, loadErr error) {
-	if err := a.applyScrollLoadState(a.previewScroll, seq, lines, loadErr); err != nil {
+//
+// A snapshot with no history beyond the visible screen (alternate-screen
+// panes like Claude Code) returns to the live capture with a status note
+// instead: there is nothing to browse.
+func (a *App) applyPreviewScrollLoad(seq int64, lines []string, paneH int, loadErr error) {
+	applied, noHistory, err := a.applyScrollLoadState(a.previewScroll, seq, lines, paneH, loadErr)
+	if err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))
+		a.exitPreviewScroll()
+		return
+	}
+	if !applied {
+		return // superseded or the mode already exited
+	}
+	if noHistory {
+		name := a.previewScrollTarget
+		a.setStatus(fmt.Sprintf("No scrollback for %q", name))
 		a.exitPreviewScroll()
 	}
 }

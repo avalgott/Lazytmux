@@ -70,11 +70,15 @@ type App struct {
 	lastHeight     int
 	lastFullscreen bool   // fullscreen state at the previous layout cycle
 	lastResizeName string // session whose window was last resized for fullscreen
-	lastResizeW    int    // and the size it was resized to
-	lastResizeH    int
-	logs           []logEntry  // recent status/error messages, shown in the logs panel
-	refreshBusy    atomic.Bool // true while a background session refresh is in flight
-	attachTarget   string      // session to attach to; set on Enter, main() acts on it
+	// fullscreenNoScrollback marks the fullscreen target's pane as having no
+	// tmux scrollback history (alternate-screen programs like Claude Code),
+	// so the status bar can say so and the wheel forwards to the pane.
+	fullscreenNoScrollback bool
+	lastResizeW            int // and the size it was resized to
+	lastResizeH            int
+	logs                   []logEntry  // recent status/error messages, shown in the logs panel
+	refreshBusy            atomic.Bool // true while a background session refresh is in flight
+	attachTarget           string      // session to attach to; set on Enter, main() acts on it
 }
 
 // logEntry is one line in the logs panel.
@@ -298,6 +302,7 @@ func (a *App) enterFullScreen() {
 	a.scroll.Exit()
 	a.previewScroll.Exit()
 	a.previewScrollTarget = ""
+	a.fullscreenNoScrollback = false
 	a.preview.Invalidate()
 	a.fullscreen.Enter(sess.Name)
 }
@@ -306,6 +311,7 @@ func (a *App) enterFullScreen() {
 func (a *App) exitFullScreen() {
 	a.scroll.Exit()
 	a.fullscreen.Exit()
+	a.fullscreenNoScrollback = false
 	a.preview.Invalidate()
 }
 
@@ -360,8 +366,14 @@ func (a *App) setError(msg string) {
 }
 
 // appendLog adds an entry to the log, trimming the oldest entries when the
-// log grows past maxLogEntries.
+// log grows past maxLogEntries. A message identical to the previous one
+// (e.g. the no-scrollback note on every wheel gesture) refreshes the
+// timestamp instead of stacking duplicates.
 func (a *App) appendLog(e logEntry) {
+	if n := len(a.logs); n > 0 && a.logs[n-1].msg == e.msg && a.logs[n-1].isErr == e.isErr {
+		a.logs[n-1].at = e.at
+		return
+	}
 	a.logs = append(a.logs, e)
 	if len(a.logs) > maxLogEntries {
 		a.logs = a.logs[len(a.logs)-maxLogEntries:]
