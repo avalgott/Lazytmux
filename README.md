@@ -88,8 +88,21 @@ All keystrokes are forwarded to the session's active pane. The screen is a captu
 | `Ctrl+\` | Back to the dashboard |
 | `Ctrl+O` | Send a literal Ctrl+D (EOF) to the pane — for exiting shells and REPLs |
 | `Ctrl+C` | Forwarded to the pane (interrupts the running program) |
+| `Ctrl+V` | Enter scroll mode (browse the pane's history) |
 | paste | Forwarded as a bracketed paste |
 | everything else | Forwarded to the pane |
+
+### Scroll mode
+
+Inside fullscreen, `Ctrl+V` (or the mouse wheel) switches to scrollback browsing — the pane's history replaces the live view. Keys are no longer forwarded while browsing.
+
+| Key | Action |
+|-----|--------|
+| `j` / `k`, `↓` / `↑` | Scroll line by line |
+| `PgUp` / `PgDn` | Scroll half a page |
+| `g` / `G` | Jump to the top / the live view |
+| mouse wheel | Scroll (enters scroll mode if not active) |
+| `Esc` / `q` / `Ctrl+V` | Back to the live view |
 
 If the session dies while you are in it (e.g. the shell exits after `Ctrl+O`), lazytmux returns to the dashboard automatically.
 
@@ -104,7 +117,7 @@ Entering fullscreen resizes the target session's window to fill your terminal (e
 | `Tab` | Cycle fields (create dialog only) |
 | `y` | Confirm the kill (delete dialog only) |
 
-The create dialog has three fields: **Name** (required), **Directory** (optional, pre-filled with the current working directory), and **Command** (optional — leave it empty to start your normal shell).
+The create dialog has three fields: **Name** (required), **Directory** (optional, pre-filled with the current working directory), and **Command** (optional — leave it empty to start your normal shell). A non-empty command runs inside your shell, so interrupting it with Ctrl+C leaves the session alive with a shell prompt, and when it finishes normally the shell takes over.
 
 ## How it works
 
@@ -124,7 +137,7 @@ The gocui and tcell forks under `third_party/` are vendored (inherited from lazy
 - The preview shows the active pane of the active window of the selected session — one pane per session.
 - Fullscreen passthrough is capture-based: full-screen TUI apps (vim, htop) redraw with noticeable lag and some special key sequences can be lossy. Use `a` (real attach) for those.
 - With `a`, attaching from inside tmux takes over the terminal as a new tmux client (tmux has one client per tty), so your original session becomes detached. Detaching from the target returns you to the dashboard on the raw terminal — run `tmux attach` after quitting to get back into your original session.
-- No mouse support, no scrollback browsing, no config files, no persistence — all deliberately out of scope for the MVP.
+- Mouse support is limited to wheel scrolling in fullscreen; no config files, no persistence — deliberately out of scope for the MVP.
 
 ## License
 

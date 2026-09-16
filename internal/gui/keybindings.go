@@ -80,6 +80,33 @@ func (a *App) setupKeybindings() error {
 		return err
 	}
 
+	// Ctrl+V toggles scrollback browsing in fullscreen.
+	if err := a.g.SetKeybinding("main", gocui.KeyCtrlV, gocui.ModNone, a.toggleScrollHandler); err != nil {
+		return err
+	}
+
+	// PageUp/PageDown: scroll the history in scroll mode, forwarded to the
+	// pane otherwise (the view binding takes precedence over the Editor).
+	for _, b := range []struct {
+		key  gocui.Key
+		name string
+	}{
+		{gocui.KeyPgup, "PageUp"},
+		{gocui.KeyPgdn, "PageDown"},
+	} {
+		if err := a.g.SetKeybinding("main", b.key, gocui.ModNone, a.pageHandler(b.name)); err != nil {
+			return err
+		}
+	}
+
+	// Mouse wheel: enters scroll mode and scrolls (fullscreen only).
+	if err := a.g.SetKeybinding("", gocui.MouseWheelUp, gocui.ModNone, a.wheelHandler(-3)); err != nil {
+		return err
+	}
+	if err := a.g.SetKeybinding("", gocui.MouseWheelDown, gocui.ModNone, a.wheelHandler(3)); err != nil {
+		return err
+	}
+
 	// 3. Create dialog: Enter confirms, Esc cancels, Tab cycles fields.
 	for _, name := range createFieldViews {
 		if err := a.g.SetKeybinding(name, gocui.KeyEnter, gocui.ModNone, a.confirmCreate); err != nil {
@@ -201,6 +228,56 @@ func (a *App) ctrlCHandler(g *gocui.Gui, v *gocui.View) error {
 	}
 	a.forwardTmuxKey("C-c")
 	return nil
+}
+
+// toggleScrollHandler toggles scrollback browsing in fullscreen (Ctrl+V).
+func (a *App) toggleScrollHandler(g *gocui.Gui, v *gocui.View) error {
+	if !a.fullscreen.IsActive() {
+		return nil
+	}
+	if a.scroll.IsActive() {
+		a.exitScrollMode()
+	} else {
+		a.enterScrollMode()
+	}
+	return nil
+}
+
+// pageHandler handles PageUp/PageDown in fullscreen: scroll the history in
+// scroll mode, forward to the pane otherwise.
+func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
+	delta := -1
+	if tmuxKey == "PageDown" {
+		delta = 1
+	}
+	return func(g *gocui.Gui, v *gocui.View) error {
+		if !a.fullscreen.IsActive() {
+			return nil
+		}
+		if a.scroll.IsActive() {
+			a.scroll.Page(delta, a.fetchScrollback)
+			a.g.Update(func(*gocui.Gui) error { return nil })
+			return nil
+		}
+		a.forwardTmuxKey(tmuxKey)
+		return nil
+	}
+}
+
+// wheelHandler handles the mouse wheel: in fullscreen it enters scroll mode
+// (if needed) and scrolls; elsewhere it is ignored.
+func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
+	return func(g *gocui.Gui, v *gocui.View) error {
+		if !a.fullscreen.IsActive() {
+			return nil
+		}
+		if !a.scroll.IsActive() {
+			a.enterScrollMode()
+		}
+		a.scroll.Move(delta, a.fetchScrollback)
+		a.g.Update(func(*gocui.Gui) error { return nil })
+		return nil
+	}
 }
 
 // cancelDialog closes whichever dialog is active. Bound to Esc on all dialog

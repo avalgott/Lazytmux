@@ -98,10 +98,15 @@ type inputEditor struct {
 }
 
 // Edit is called by gocui for every keypress when the view is Editable.
-// Runes are sent literally; special keys are translated via specialKeyMap.
+// In scroll mode the keys move the scrollback viewport instead of being
+// forwarded; otherwise runes are sent literally and special keys are
+// translated via specialKeyMap.
 func (e *inputEditor) Edit(v *gocui.View, key gocui.Key, ch rune, mod gocui.Modifier) bool {
 	if !e.app.fullscreen.IsActive() {
 		return false
+	}
+	if e.app.scroll.IsActive() {
+		return e.scrollEdit(key, ch)
 	}
 	if key == gocui.KeyEnter {
 		e.app.forwardTmuxKey("Enter")
@@ -120,6 +125,28 @@ func (e *inputEditor) Edit(v *gocui.View, key gocui.Key, ch rune, mod gocui.Modi
 		return true
 	}
 	return false
+}
+
+// scrollEdit handles keys while scroll mode is active. Rune keys reach the
+// Editor because the fork skips rune bindings on editable views.
+func (e *inputEditor) scrollEdit(key gocui.Key, ch rune) bool {
+	app := e.app
+	switch {
+	case key == gocui.KeyEsc, ch == 'q', ch == 'Q':
+		app.exitScrollMode()
+	case ch == 'j', key == gocui.KeyArrowDown:
+		app.scroll.Move(1, app.fetchScrollback)
+	case ch == 'k', key == gocui.KeyArrowUp:
+		app.scroll.Move(-1, app.fetchScrollback)
+	case ch == 'g':
+		app.scroll.Top(app.fetchScrollback)
+	case ch == 'G':
+		app.scroll.Bottom(app.fetchScrollback)
+	default:
+		return false
+	}
+	app.g.Update(func(*gocui.Gui) error { return nil })
+	return true
 }
 
 // forwardLiteral sends a rune as literal text to the fullscreen target and

@@ -207,7 +207,12 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	if err != nil && !isUnknownView(err) {
 		return err
 	}
-	v.Frame = false
+	// Framed, like lazyclaude's fullscreen: the rounded border with the
+	// session title occupies the view's edge rows (the fork draws content at
+	// y0+1 either way, so the frame costs no content rows and removes the
+	// awkward blank top row of a frameless view).
+	setRoundedFrame(v)
+	v.Title = " " + a.fullscreen.Target() + " "
 	v.Wrap = false
 	v.Editable = true
 	if a.editor == nil {
@@ -216,7 +221,11 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	v.Editor = a.editor
 	v.Clear()
 	a.resizeFullScreenTarget(v)
-	a.renderPreview(v)
+	if a.scroll.IsActive() {
+		a.renderScrollContent(v)
+	} else {
+		a.renderPreview(v)
+	}
 
 	// Status bar (bottom, frameless): session name + mode hints.
 	v2, err := g.SetView("fullscreen-bar", 0, maxY-2, maxX-1, maxY, 0)
@@ -225,11 +234,16 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	}
 	v2.Frame = false
 	v2.Clear()
-	name := a.fullscreen.Target()
-	fmt.Fprint(v2, " "+presentation.Bold+name+presentation.Reset+"  "+
-		presentation.StyledKey("ctrl+d", "back")+"  "+
-		presentation.StyledKey("ctrl+o", "eof")+"  "+
-		presentation.StyledKey("ctrl+\\", "back"))
+	if a.scroll.IsActive() {
+		fmt.Fprint(v2, a.scrollStatusText())
+	} else {
+		name := a.fullscreen.Target()
+		fmt.Fprint(v2, " "+presentation.Bold+name+presentation.Reset+"  "+
+			presentation.StyledKey("ctrl+d", "back")+"  "+
+			presentation.StyledKey("ctrl+o", "eof")+"  "+
+			presentation.StyledKey("ctrl+v", "scroll")+"  "+
+			presentation.StyledKey("ctrl+\\", "back"))
+	}
 
 	g.Cursor = true
 	if _, err := g.SetCurrentView("main"); err != nil && !isUnknownView(err) {
@@ -242,9 +256,13 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 // fullscreen view. capture-pane returns the pane's real size, and sessions
 // created detached (or via `n`) keep tmux's default 80x24 window forever
 // unless something attaches to them — so without this the fullscreen content
-// stays a small box no matter how large the terminal is. The window is made
-// one row taller than the view to absorb the session's status bar when it has
-// one; the capture crop trims the rest.
+// stays a small box no matter how large the terminal is.
+//
+// The window is sized to exactly the view dimensions (like lazyclaude), so
+// the pane and the view agree 1:1 — full-screen programs (e.g. Claude Code)
+// lay out to the exact space the view shows, and no row is clipped. With the
+// session's status bar on, the pane is one row shorter and still fits
+// entirely.
 //
 // Runs once per (target, size) pair; the resize itself happens in a
 // goroutine so the event loop never blocks on tmux.
@@ -272,7 +290,7 @@ func (a *App) resizeFullScreenTarget(v *gocui.View) {
 	a.preview.Invalidate()
 
 	go func() {
-		_ = a.svc.ResizeWindow(context.Background(), target, previewW, previewH+1)
+		_ = a.svc.ResizeWindow(context.Background(), target, previewW, previewH)
 		a.g.Update(func(*gocui.Gui) error { return nil })
 	}()
 }

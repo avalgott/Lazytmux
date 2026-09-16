@@ -46,6 +46,13 @@ type Client interface {
 	// CapturePaneANSI captures pane content with ANSI escape codes.
 	CapturePaneANSI(ctx context.Context, target string) (string, error)
 
+	// CapturePaneANSIWithCursor captures pane content with ANSI escape codes
+	// and the pane cursor position in a single tmux invocation. The content
+	// and the cursor must come from the same pane state — full-screen
+	// programs that repaint constantly (e.g. Claude Code) shift their layout
+	// between two separate calls, which puts the rendered cursor one row off.
+	CapturePaneANSIWithCursor(ctx context.Context, target string) (content string, cursorX, cursorY int, err error)
+
 	// CapturePaneANSIRange captures a range of pane content with ANSI escape codes.
 	// start and end are line offsets passed as -S and -E flags to capture-pane.
 	// Negative values count from the end of the scrollback buffer.

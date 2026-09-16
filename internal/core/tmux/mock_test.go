@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/avalgott/Lazytmux/internal/core/tmux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/avalgott/Lazytmux/internal/core/tmux"
 )
 
 func TestMockClient_HasSession(t *testing.T) {

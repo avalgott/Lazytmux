@@ -3,6 +3,9 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -64,8 +67,37 @@ func TestServiceCreate(t *testing.T) {
 	opts := mock.LastNewSessionOpts
 	assert.Equal(t, "devbox", opts.Name)
 	assert.Equal(t, "/home/u/projects", opts.StartDir)
-	assert.Equal(t, "ssh devbox", opts.Command)
 	assert.True(t, opts.Detached)
+
+	// The command runs inside an interactive shell wrapper so Ctrl+C cannot
+	// kill the pane (and with it the session). The user's command lives in a
+	// self-deleting temp script.
+	assert.Contains(t, opts.Command, `exec "$SHELL" -lic 'source /tmp/lazytmux-cmd-`)
+	assert.Contains(t, opts.Command, `; exec "$SHELL"'`)
+
+	script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic 'source `), `; exec "$SHELL"'`)
+	// The mock never runs the session, so the script's self-delete line never
+	// fires — remove it at test end.
+	t.Cleanup(func() { _ = os.Remove(script) })
+
+	data, err := os.ReadFile(script)
+	require.NoError(t, err, "temp script should exist")
+	assert.Contains(t, string(data), "rm -f '"+script+"'", "script should self-delete")
+	assert.Contains(t, string(data), "\nssh devbox\n")
+}
+
+func TestServiceCreateCleansUpScriptOnFailure(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.ErrNewSession = assert.AnError
+	svc := NewService(mock)
+
+	err := svc.Create(context.Background(), CreateOpts{Name: "x", Command: "top"})
+	assert.ErrorIs(t, err, assert.AnError)
+
+	// The temp script must be removed when the session could not be created.
+	matches, err := filepath.Glob("/tmp/lazytmux-cmd-*")
+	require.NoError(t, err)
+	assert.Empty(t, matches, "no leftover command scripts")
 }
 
 func TestServiceCreateShellSession(t *testing.T) {
@@ -134,6 +166,46 @@ func TestServiceCaptureCrops(t *testing.T) {
 	assert.Len(t, lines, 2, "capture should be cropped to 2 lines")
 	assert.Len(t, lines[0], 80, "first line should be truncated to 80 columns")
 	assert.Equal(t, "line2", lines[1])
+}
+
+func TestServiceCaptureAnchorsToCursor(t *testing.T) {
+	mock := tmux.NewMockClient()
+	// 40 rows of screen; the shell prompt sits on the last row, below a
+	// full-screen program's remains (rows 0-38) — like after `top` exits
+	// without restoring the screen.
+	rows := make([]string, 40)
+	for i := range rows {
+		rows[i] = fmt.Sprintf("row-%02d", i)
+	}
+	mock.Captured["devbox"] = strings.Join(rows, "\n")
+	mock.Messages["devbox"] = "0,39"
+	svc := NewService(mock)
+
+	preview, err := svc.Capture(context.Background(), "devbox", 80, 36)
+	require.NoError(t, err)
+	lines := strings.Split(preview.Content, "\n")
+	require.Len(t, lines, 36)
+	// The window is anchored so the cursor row is visible at the bottom.
+	assert.Equal(t, "row-04", lines[0])
+	assert.Equal(t, "row-39", lines[35])
+	assert.Equal(t, 35, preview.CursorY, "cursor must be remapped into the cropped window")
+}
+
+func TestServiceCaptureTopAnchoredWhenCursorFits(t *testing.T) {
+	mock := tmux.NewMockClient()
+	rows := make([]string, 40)
+	for i := range rows {
+		rows[i] = fmt.Sprintf("row-%02d", i)
+	}
+	mock.Captured["devbox"] = strings.Join(rows, "\n")
+	mock.Messages["devbox"] = "0,2" // fresh shell prompt near the top
+	svc := NewService(mock)
+
+	preview, err := svc.Capture(context.Background(), "devbox", 80, 36)
+	require.NoError(t, err)
+	lines := strings.Split(preview.Content, "\n")
+	assert.Equal(t, "row-00", lines[0])
+	assert.Equal(t, 2, preview.CursorY)
 }
 
 func TestServiceCaptureMissingCursor(t *testing.T) {

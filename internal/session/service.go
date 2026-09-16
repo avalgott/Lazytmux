@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/avalgott/Lazytmux/internal/core/shell"
 	"github.com/avalgott/Lazytmux/internal/core/tmux"
 )
 
@@ -46,6 +47,14 @@ type Provider interface {
 	Kill(ctx context.Context, name string) error
 	Rename(ctx context.Context, name, newName string) error
 	Capture(ctx context.Context, name string, width, height int) (Preview, error)
+	// CaptureScrollback captures a range of the session's pane history
+	// (including the visible screen) with ANSI escape codes. start/end are
+	// tmux capture-pane line offsets: 0 is the top of the visible screen,
+	// negative values count back into the scrollback history.
+	CaptureScrollback(ctx context.Context, name string, start, end int) (Preview, error)
+	// HistorySize returns the number of lines in the pane's scrollback
+	// history (the visible screen excluded).
+	HistorySize(ctx context.Context, name string) (int, error)
 	// SendKeys sends tmux key names (e.g. "Enter", "Up", "C-c") to the
 	// session's active pane. Used by fullscreen passthrough mode.
 	SendKeys(ctx context.Context, name string, keys ...string) error
@@ -107,13 +116,62 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 
 // Create starts a new detached tmux session. When opts.Command is empty the
 // session runs the user's normal shell.
+//
+// A non-empty command is wrapped in an interactive shell (the user's $SHELL
+// sources a temp script holding the command, then execs a fresh shell). This
+// keeps the shell between the command and the pane, so Ctrl+C interrupts the
+// command without killing the pane — which would otherwise close the window
+// and delete the whole session, since tmux runs the command as the pane's
+// process. The script deletes itself when the shell reads it.
 func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
-	return s.tmux.NewSession(ctx, tmux.NewSessionOpts{
+	command := opts.Command
+	script := ""
+	if command != "" {
+		var err error
+		script, err = writeCommandScript(command)
+		if err != nil {
+			return fmt.Errorf("write command script: %w", err)
+		}
+		// The path comes from CreateTemp in /tmp, so it is safe inside the
+		// single-quoted wrapper (no quotes, no spaces) — same trick as
+		// lazyclaude's launcher scripts.
+		command = fmt.Sprintf(`exec "$SHELL" -lic 'source %s; exec "$SHELL"'`, script)
+	}
+
+	err := s.tmux.NewSession(ctx, tmux.NewSessionOpts{
 		Name:     opts.Name,
 		StartDir: opts.Dir,
-		Command:  opts.Command,
+		Command:  command,
 		Detached: true,
 	})
+	if err != nil {
+		// Clean up only on failure; on success the script self-deletes when
+		// the shell sources it.
+		if script != "" {
+			_ = os.Remove(script)
+		}
+		return err
+	}
+	return nil
+}
+
+// writeCommandScript writes the user's command to a temp file whose first
+// line removes the file itself. Returns the script path.
+func writeCommandScript(command string) (string, error) {
+	f, err := os.CreateTemp("", "lazytmux-cmd-*")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if err := f.Chmod(0o700); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	if _, err := fmt.Fprintf(f, "rm -f %s\n%s\n", shell.Quote(f.Name()), command); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 // Kill destroys a tmux session.
@@ -128,20 +186,13 @@ func (s *Service) Rename(ctx context.Context, name, newName string) error {
 
 // Capture returns the visible content of the session's active pane, cropped
 // to width x height columns/rows. ANSI escape sequences are preserved so the
-// preview reproduces colors as closely as possible.
+// preview reproduces colors as closely as possible. The content and the pane
+// cursor are fetched atomically so the rendered cursor never disagrees with
+// the rendered content.
 func (s *Service) Capture(ctx context.Context, name string, width, height int) (Preview, error) {
-	content, err := s.tmux.CapturePaneANSI(ctx, name)
+	content, cursorX, cursorY, err := s.tmux.CapturePaneANSIWithCursor(ctx, name)
 	if err != nil {
 		return Preview{}, err
-	}
-
-	var cursorX, cursorY int
-	if pos, posErr := s.tmux.ShowMessage(ctx, name, "#{cursor_x},#{cursor_y}"); posErr == nil {
-		parts := strings.SplitN(strings.TrimSpace(pos), ",", 2)
-		if len(parts) == 2 {
-			cursorX, _ = strconv.Atoi(parts[0])
-			cursorY, _ = strconv.Atoi(parts[1])
-		}
 	}
 
 	lines := strings.Split(content, "\n")
@@ -150,8 +201,21 @@ func (s *Service) Capture(ctx context.Context, name string, width, height int) (
 			lines[i] = ansi.Truncate(line, width, "")
 		}
 	}
-	if len(lines) > height {
-		lines = lines[:height]
+	// Anchor the vertical window to the cursor, like a real terminal does:
+	// when the cursor sits below the visible window (e.g. after a full-screen
+	// program like top exits without restoring the screen, leaving the shell
+	// prompt on the last row), show the window that contains it instead of
+	// cutting the prompt off.
+	if height > 0 && len(lines) > height {
+		start := 0
+		if cursorY >= height {
+			start = cursorY - height + 1
+			if start > len(lines)-height {
+				start = len(lines) - height
+			}
+		}
+		lines = lines[start : start+height]
+		cursorY -= start
 	}
 
 	return Preview{
@@ -159,6 +223,25 @@ func (s *Service) Capture(ctx context.Context, name string, width, height int) (
 		CursorX: cursorX,
 		CursorY: cursorY,
 	}, nil
+}
+
+// CaptureScrollback captures a range of the session's pane history.
+func (s *Service) CaptureScrollback(ctx context.Context, name string, start, end int) (Preview, error) {
+	content, err := s.tmux.CapturePaneANSIRange(ctx, name, start, end)
+	if err != nil {
+		return Preview{}, err
+	}
+	return Preview{Content: content}, nil
+}
+
+// HistorySize returns the number of scrollback lines in the session's pane.
+func (s *Service) HistorySize(ctx context.Context, name string) (int, error) {
+	out, err := s.tmux.ShowMessage(ctx, name, "#{history_size}")
+	if err != nil {
+		return 0, err
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(out))
+	return n, nil
 }
 
 // SendKeys sends tmux key names to the session's active pane.

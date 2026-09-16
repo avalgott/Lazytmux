@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,17 +18,19 @@ import (
 // fakeProvider implements session.Provider for tests. Mutations are recorded
 // by background goroutines (the dialog handlers), so access is synchronized.
 type fakeProvider struct {
-	mu       sync.Mutex
-	infos    []session.Info
-	creates  []session.CreateOpts
-	killed   []string
-	renames  []renameCall
-	resizes  []resizeCall
-	captured session.Preview
-	keys     map[string][]string // session -> forwarded tmux key names
-	literals map[string]string   // session -> forwarded literal text
-	pastes   map[string]string   // session -> pasted text
-	err      error
+	mu           sync.Mutex
+	infos        []session.Info
+	creates      []session.CreateOpts
+	killed       []string
+	renames      []renameCall
+	resizes      []resizeCall
+	captured     session.Preview
+	keys         map[string][]string // session -> forwarded tmux key names
+	literals     map[string]string   // session -> forwarded literal text
+	pastes       map[string]string   // session -> pasted text
+	scrollRanges []scrollRange       // (start,end) pairs passed to CaptureScrollback
+	history      int                 // value returned by HistorySize
+	err          error
 }
 
 type renameCall struct{ from, to string }
@@ -37,6 +40,8 @@ type resizeCall struct {
 	width  int
 	height int
 }
+
+type scrollRange struct{ start, end int }
 
 func (f *fakeProvider) List(context.Context) ([]session.Info, error) {
 	return f.infos, f.err
@@ -65,6 +70,21 @@ func (f *fakeProvider) Rename(_ context.Context, from, to string) error {
 
 func (f *fakeProvider) Capture(_ context.Context, _ string, _, _ int) (session.Preview, error) {
 	return f.captured, f.err
+}
+
+func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string, start, end int) (session.Preview, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scrollRanges = append(f.scrollRanges, scrollRange{start, end})
+	var sb strings.Builder
+	for i := start; i <= end; i++ {
+		fmt.Fprintf(&sb, "line %d\n", i)
+	}
+	return session.Preview{Content: sb.String()}, f.err
+}
+
+func (f *fakeProvider) HistorySize(_ context.Context, _ string) (int, error) {
+	return f.history, f.err
 }
 
 func (f *fakeProvider) SendKeys(_ context.Context, name string, keys ...string) error {
@@ -415,6 +435,12 @@ func TestFullScreenLayout(t *testing.T) {
 	assert.Contains(t, bar.Buffer(), "back")
 	assert.Contains(t, bar.Buffer(), "eof")
 
+	// The fullscreen view is framed with the session name as its title,
+	// like lazyclaude's fullscreen.
+	main, _ := app.g.View("main")
+	assert.True(t, main.Frame)
+	assert.Equal(t, " devbox ", main.Title)
+
 	// Ctrl+D exits; the dashboard layout returns.
 	require.NoError(t, app.exitFullScreenHandler(app.g, nil))
 	assert.False(t, app.fullscreen.IsActive())
@@ -476,10 +502,9 @@ func TestFullScreenResizesTargetWindow(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	require.NoError(t, app.layout(app.g))
 
-	// Entering fullscreen resizes the target window to fill the view.
+	// Entering fullscreen resizes the target window to exactly the view size.
 	// Headless screen is 120x40; the fullscreen main view spans (0,0)-(119,38)
-	// and its inner size is 118x37 (the fork's unconditional -2 inset). The
-	// window gets +1 row for the status bar.
+	// and its inner size is 118x37 (the fork's unconditional -2 inset).
 	require.NoError(t, app.openFullScreenHandler(app.g, nil))
 	require.NoError(t, app.layout(app.g))
 
@@ -491,7 +516,7 @@ func TestFullScreenResizesTargetWindow(t *testing.T) {
 	p.mu.Lock()
 	resizes := append([]resizeCall(nil), p.resizes...)
 	p.mu.Unlock()
-	assert.Equal(t, resizeCall{name: "devbox", width: 118, height: 38}, resizes[0])
+	assert.Equal(t, resizeCall{name: "devbox", width: 118, height: 37}, resizes[0])
 
 	// A second layout at the same size must not resize again.
 	require.NoError(t, app.layout(app.g))
@@ -510,6 +535,85 @@ func TestApplySessionRefreshClearsStaleList(t *testing.T) {
 	app.applySessionRefresh(nil, nil)
 	assert.Empty(t, app.sessions)
 	assert.Nil(t, app.currentSession())
+}
+
+func TestScrollStateNavigation(t *testing.T) {
+	ss := &ScrollState{}
+	ss.Enter(100, 40, 20, 80) // 100 history lines + 40 visible, 20-line viewport
+
+	// Enter starts at the bottom (live view): pos = 140-20 = 120,
+	// capture range = [120-100, 120-100+19] = [20, 39].
+	assert.Equal(t, 120, ss.pos)
+	fetch := func(start, end int) ([]string, error) {
+		return []string{fmt.Sprintf("%d-%d", start, end)}, nil
+	}
+	assert.True(t, ss.setPos(120, fetch))
+
+	ss.Move(-5, fetch)
+	assert.Equal(t, 115, ss.pos)
+	ss.Top(fetch)
+	assert.Equal(t, 0, ss.pos)
+	ss.Move(-1, fetch)
+	assert.Equal(t, 0, ss.pos, "cannot scroll above the oldest line")
+	ss.Bottom(fetch)
+	assert.Equal(t, 120, ss.pos)
+	ss.Page(-1, fetch)
+	assert.Equal(t, 110, ss.pos, "page = half the viewport")
+}
+
+func TestScrollModeKeyHandling(t *testing.T) {
+	p := &fakeProvider{history: 50}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	// Enter scroll mode; the Editor must consume j/k and not forward them.
+	app.enterScrollMode()
+	assert.True(t, app.scroll.IsActive())
+
+	editor := &inputEditor{app: app}
+	assert.True(t, editor.Edit(nil, 0, 'j', 0), "j scrolls in scroll mode")
+	p.mu.Lock()
+	literals := p.literals["devbox"]
+	p.mu.Unlock()
+	assert.Empty(t, literals, "keys must not be forwarded in scroll mode")
+
+	// Esc exits scroll mode and returns to live forwarding.
+	assert.True(t, editor.Edit(nil, gocui.KeyEsc, 0, 0))
+	assert.False(t, app.scroll.IsActive())
+	assert.True(t, editor.Edit(nil, 0, 'x', 0), "back to forwarding after scroll mode")
+	p.mu.Lock()
+	literals = p.literals["devbox"]
+	p.mu.Unlock()
+	assert.Equal(t, "x", literals)
+}
+
+func TestScrollModeWheelAndToggle(t *testing.T) {
+	p := &fakeProvider{history: 50}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+
+	// Wheel on the dashboard does nothing.
+	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
+	assert.False(t, app.scroll.IsActive())
+
+	// Wheel in fullscreen enters scroll mode and scrolls.
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
+	assert.True(t, app.scroll.IsActive())
+
+	// Ctrl+V toggles it off.
+	require.NoError(t, app.toggleScrollHandler(app.g, nil))
+	assert.False(t, app.scroll.IsActive())
+
+	// Exiting fullscreen also exits scroll mode.
+	app.fullscreen.Enter("devbox")
+	app.scroll.Enter(10, 10, 5, 80)
+	assert.True(t, app.scroll.IsActive())
+	app.exitFullScreen()
+	assert.False(t, app.scroll.IsActive())
 }
 
 func TestFullScreenAutoExitWhenSessionDies(t *testing.T) {

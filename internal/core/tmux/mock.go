@@ -3,6 +3,8 @@ package tmux
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // MockClient implements Client for testing.
@@ -203,6 +205,21 @@ func (m *MockClient) CapturePaneANSI(_ context.Context, target string) (string, 
 		return "", m.ErrCapture
 	}
 	return m.Captured[target], nil
+}
+
+func (m *MockClient) CapturePaneANSIWithCursor(_ context.Context, target string) (string, int, int, error) {
+	if m.ErrCapture != nil {
+		return "", 0, 0, m.ErrCapture
+	}
+	cursorX, cursorY := 0, 0
+	if pos := m.Messages[target]; pos != "" {
+		parts := strings.SplitN(pos, ",", 2)
+		if len(parts) == 2 {
+			cursorX, _ = strconv.Atoi(parts[0])
+			cursorY, _ = strconv.Atoi(parts[1])
+		}
+	}
+	return m.Captured[target], cursorX, cursorY, nil
 }
 
 func (m *MockClient) CapturePaneANSIRange(_ context.Context, target string, start, end int) (string, error) {

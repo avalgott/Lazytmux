@@ -334,6 +334,41 @@ func (c *ExecClient) CapturePaneANSI(ctx context.Context, target string) (string
 	return c.run(ctx, "capture-pane", "-t", target, "-ep")
 }
 
+// CapturePaneANSIWithCursor captures the pane content and the cursor position
+// in a single tmux invocation (capture-pane followed by display-message in
+// the same command batch). The last line of the output is the cursor pair.
+func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target string) (string, int, int, error) {
+	ctx2, cancel := context.WithTimeout(ctx, defaultTimeout)
+	defer cancel()
+
+	args := []string{"capture-pane", "-t", target, "-ep", ";",
+		"display-message", "-t", target, "-p", "#{cursor_x},#{cursor_y}"}
+	fullArgs := c.prependSocket(args)
+	cmd := exec.CommandContext(ctx2, c.tmuxBin, fullArgs...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	c.logCmd("CapturePaneANSIWithCursor", fullArgs, string(out), err)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
+	}
+
+	// The cursor pair is the last line of the combined output. Both commands
+	// end their output with a newline, so trim trailing newlines first.
+	s := strings.TrimRight(string(out), "\n")
+	idx := strings.LastIndex(s, "\n")
+	if idx < 0 {
+		return s, 0, 0, nil
+	}
+	content := s[:idx]
+	cursorX, cursorY := 0, 0
+	if parts := strings.SplitN(strings.TrimSpace(s[idx+1:]), ",", 2); len(parts) == 2 {
+		cursorX, _ = strconv.Atoi(parts[0])
+		cursorY, _ = strconv.Atoi(parts[1])
+	}
+	return content, cursorX, cursorY, nil
+}
+
 // CapturePaneANSIRange captures a range of pane content with ANSI escape codes.
 func (c *ExecClient) CapturePaneANSIRange(ctx context.Context, target string, start, end int) (string, error) {
 	return c.run(ctx, "capture-pane", "-t", target, "-ep",

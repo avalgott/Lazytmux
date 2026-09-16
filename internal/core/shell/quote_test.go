@@ -3,8 +3,8 @@ package shell_test
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/avalgott/Lazytmux/internal/core/shell"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestQuote_Simple(t *testing.T) {

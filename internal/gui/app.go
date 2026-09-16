@@ -52,6 +52,7 @@ type App struct {
 	cursor     int            // selected session index
 	preview    *PreviewCache
 	fullscreen *FullScreenState
+	scroll     *ScrollState
 	editor     *inputEditor // fullscreen key-forwarding editor (lazily created)
 	dialog     DialogKind
 	// createField is the active input field of the create dialog
@@ -113,11 +114,13 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 		svc:        svc,
 		preview:    &PreviewCache{},
 		fullscreen: &FullScreenState{},
+		scroll:     &ScrollState{},
 	}
 
 	g.Highlight = true
 	g.SelFrameColor = gocui.ColorCyan
-	g.Mouse = false
+	// Mouse reporting enables wheel scrolling in fullscreen scroll mode.
+	g.Mouse = true
 
 	g.SetManagerFunc(app.layout)
 
@@ -128,7 +131,9 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 		if text == "" {
 			return nil
 		}
-		if app.fullscreen.IsActive() {
+		// Pastes are forwarded in live fullscreen mode only — in scroll mode
+		// they would land in the history being browsed, which is confusing.
+		if app.fullscreen.IsActive() && !app.scroll.IsActive() {
 			target := app.fullscreen.Target()
 			if target != "" {
 				_ = svc.Paste(context.Background(), target, text)
@@ -267,12 +272,14 @@ func (a *App) enterFullScreen() {
 	if sess == nil {
 		return
 	}
+	a.scroll.Exit()
 	a.preview.Invalidate()
 	a.fullscreen.Enter(sess.Name)
 }
 
 // exitFullScreen returns to the dashboard layout.
 func (a *App) exitFullScreen() {
+	a.scroll.Exit()
 	a.fullscreen.Exit()
 	a.preview.Invalidate()
 }
