@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -47,14 +47,10 @@ type Provider interface {
 	Kill(ctx context.Context, name string) error
 	Rename(ctx context.Context, name, newName string) error
 	Capture(ctx context.Context, name string, width, height int) (Preview, error)
-	// CaptureScrollback captures a range of the session's pane history
-	// (including the visible screen) with ANSI escape codes. start/end are
-	// tmux capture-pane line offsets: 0 is the top of the visible screen,
-	// negative values count back into the scrollback history.
-	CaptureScrollback(ctx context.Context, name string, start, end int) (Preview, error)
-	// HistorySize returns the number of lines in the pane's scrollback
-	// history (the visible screen excluded).
-	HistorySize(ctx context.Context, name string) (int, error)
+	// CaptureScrollback captures the session's whole pane history — from
+	// tmux's oldest-history sentinel to the current bottom — in one atomic
+	// tmux operation, with ANSI escape codes.
+	CaptureScrollback(ctx context.Context, name string) (Preview, error)
 	// SendKeys sends tmux key names (e.g. "Enter", "Up", "C-c") to the
 	// session's active pane. Used by fullscreen passthrough mode.
 	SendKeys(ctx context.Context, name string, keys ...string) error
@@ -126,16 +122,18 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 	command := opts.Command
 	script := ""
+	var sessionEnv map[string]string
 	if command != "" {
 		var err error
 		script, err = writeCommandScript(command)
 		if err != nil {
 			return fmt.Errorf("write command script: %w", err)
 		}
-		// The path comes from CreateTemp in /tmp, so it is safe inside the
-		// single-quoted wrapper (no quotes, no spaces) — same trick as
-		// lazyclaude's launcher scripts.
-		command = fmt.Sprintf(`exec "$SHELL" -lic 'source %s; exec "$SHELL"'`, script)
+		command, sessionEnv, err = buildShellWrapper(script)
+		if err != nil {
+			_ = os.Remove(script)
+			return err
+		}
 	}
 
 	err := s.tmux.NewSession(ctx, tmux.NewSessionOpts{
@@ -143,6 +141,7 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 		StartDir: opts.Dir,
 		Command:  command,
 		Detached: true,
+		Env:      sessionEnv,
 	})
 	if err != nil {
 		// Clean up only on failure; on success the script self-deletes when
@@ -155,10 +154,49 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 	return nil
 }
 
+// buildShellWrapper returns the tmux command that runs the user's command
+// inside their interactive shell, the session environment that pins that
+// shell, or an error for shells we cannot wrap correctly.
+//
+// The shell is resolved here and pinned into the new session's environment,
+// so the template selection can never diverge from the shell the pane
+// actually executes (a long-lived tmux server may carry a stale SHELL).
+// Every supported shell gets a template that works in it; the rest are
+// rejected explicitly rather than running a silently broken command. The
+// script path is always created directly under /tmp (never os.TempDir, which
+// honors TMPDIR and could introduce spaces or metacharacters), so it is safe
+// inside the single-quoted wrapper — same trick as lazyclaude's launcher
+// scripts.
+func buildShellWrapper(script string) (string, map[string]string, error) {
+	shellPath := os.Getenv("SHELL")
+	if shellPath == "" {
+		shellPath = "/bin/sh"
+	}
+	name := filepath.Base(shellPath)
+
+	// The templates are per shell family — fish does not understand POSIX
+	// ${var:-default} expansion, so each family gets its own syntax. SHELL is
+	// pinned via the session env, so the plain "$SHELL" reference is exact.
+	var relaunch string
+	switch name {
+	case "sh", "bash", "dash", "ksh", "zsh":
+		relaunch = `exec "$SHELL" -lic '. ` + script + `; exec "$SHELL"'`
+	case "fish":
+		relaunch = `exec "$SHELL" -lic 'source ` + script + `; exec "$SHELL"'`
+	case "csh", "tcsh":
+		return "", nil, fmt.Errorf("shell %q is not supported for command sessions — use an empty command or a POSIX shell", name)
+	default:
+		return "", nil, fmt.Errorf("unknown shell %q — command sessions support sh, bash, dash, ksh, zsh, and fish", name)
+	}
+	return relaunch, map[string]string{"SHELL": shellPath}, nil
+}
+
 // writeCommandScript writes the user's command to a temp file whose first
-// line removes the file itself. Returns the script path.
+// line removes the file itself. The file is created directly under /tmp (not
+// os.TempDir) so the path is always safe to interpolate into the
+// single-quoted shell wrapper, regardless of TMPDIR. Returns the script path.
 func writeCommandScript(command string) (string, error) {
-	f, err := os.CreateTemp("", "lazytmux-cmd-*")
+	f, err := os.CreateTemp("/tmp", "lazytmux-cmd-*")
 	if err != nil {
 		return "", err
 	}
@@ -225,23 +263,14 @@ func (s *Service) Capture(ctx context.Context, name string, width, height int) (
 	}, nil
 }
 
-// CaptureScrollback captures a range of the session's pane history.
-func (s *Service) CaptureScrollback(ctx context.Context, name string, start, end int) (Preview, error) {
-	content, err := s.tmux.CapturePaneANSIRange(ctx, name, start, end)
+// CaptureScrollback captures the session's whole pane history in one
+// atomic tmux operation.
+func (s *Service) CaptureScrollback(ctx context.Context, name string) (Preview, error) {
+	content, err := s.tmux.CapturePaneANSIHistory(ctx, name)
 	if err != nil {
 		return Preview{}, err
 	}
 	return Preview{Content: content}, nil
-}
-
-// HistorySize returns the number of scrollback lines in the session's pane.
-func (s *Service) HistorySize(ctx context.Context, name string) (int, error) {
-	out, err := s.tmux.ShowMessage(ctx, name, "#{history_size}")
-	if err != nil {
-		return 0, err
-	}
-	n, _ := strconv.Atoi(strings.TrimSpace(out))
-	return n, nil
 }
 
 // SendKeys sends tmux key names to the session's active pane.

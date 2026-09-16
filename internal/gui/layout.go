@@ -113,6 +113,12 @@ func (a *App) layout(g *gocui.Gui) error {
 		a.lastWidth = maxX
 		a.lastHeight = maxY
 		blankScreen(g, maxX, maxY)
+		// The scroll viewport dimensions are tied to the pane geometry;
+		// leave scroll mode so the next entry recomputes them at the new
+		// size (the live preview resizes correctly on its own).
+		if a.scroll.IsActive() {
+			a.scroll.Exit()
+		}
 	}
 
 	// Same blanking when entering or leaving fullscreen: the dashboard and
@@ -291,7 +297,16 @@ func (a *App) resizeFullScreenTarget(v *gocui.View) {
 
 	go func() {
 		_ = a.svc.ResizeWindow(context.Background(), target, previewW, previewH)
-		a.g.Update(func(*gocui.Gui) error { return nil })
+		a.g.Update(func(*gocui.Gui) error {
+			// The resize may have completed after a scroll snapshot was
+			// captured at the old pane geometry (the terminal itself did not
+			// change, so the layout resize detection cannot help). Reload the
+			// snapshot so the frozen viewport matches the pane's final size.
+			if a.scroll.IsActive() {
+				a.restartScrollLoad()
+			}
+			return nil
+		})
 	}()
 }
 

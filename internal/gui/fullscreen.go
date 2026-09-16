@@ -134,17 +134,21 @@ func (e *inputEditor) scrollEdit(key gocui.Key, ch rune) bool {
 	switch {
 	case key == gocui.KeyEsc, ch == 'q', ch == 'Q':
 		app.exitScrollMode()
+		return true
 	case ch == 'j', key == gocui.KeyArrowDown:
-		app.scroll.Move(1, app.fetchScrollback)
+		app.scroll.Move(1)
 	case ch == 'k', key == gocui.KeyArrowUp:
-		app.scroll.Move(-1, app.fetchScrollback)
+		app.scroll.Move(-1)
 	case ch == 'g':
-		app.scroll.Top(app.fetchScrollback)
+		app.scroll.Top()
 	case ch == 'G':
-		app.scroll.Bottom(app.fetchScrollback)
+		app.scroll.Bottom()
 	default:
 		return false
 	}
+	// Scrolling slices the in-memory snapshot; only a redraw is needed.
+	// Redraw immediately so the status bar position updates without waiting
+	// for the async fetch.
 	app.g.Update(func(*gocui.Gui) error { return nil })
 	return true
 }

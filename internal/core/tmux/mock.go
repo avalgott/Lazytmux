@@ -222,12 +222,11 @@ func (m *MockClient) CapturePaneANSIWithCursor(_ context.Context, target string)
 	return m.Captured[target], cursorX, cursorY, nil
 }
 
-func (m *MockClient) CapturePaneANSIRange(_ context.Context, target string, start, end int) (string, error) {
+func (m *MockClient) CapturePaneANSIHistory(_ context.Context, target string) (string, error) {
 	if m.ErrCapture != nil {
 		return "", m.ErrCapture
 	}
-	key := fmt.Sprintf("%s:%d:%d", target, start, end)
-	if content, ok := m.RangeCaptures[key]; ok {
+	if content, ok := m.RangeCaptures[target+":hist"]; ok {
 		return content, nil
 	}
 	return m.Captured[target], nil

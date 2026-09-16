@@ -87,7 +87,17 @@ func (c *ExecClient) prependSocket(args []string) []string {
 	return append(prefix, args...)
 }
 
+// run executes a tmux command and returns the trimmed output. Most commands
+// are parsed field-wise, so surrounding whitespace is noise.
 func (c *ExecClient) run(ctx context.Context, args ...string) (string, error) {
+	out, err := c.runRaw(ctx, args...)
+	return strings.TrimSpace(out), err
+}
+
+// runRaw executes a tmux command and returns the output untouched. Needed
+// for capture-pane -S/-E ranges, where leading/trailing blank lines carry
+// meaning (they shift the content relative to the requested offsets).
+func (c *ExecClient) runRaw(ctx context.Context, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
@@ -104,7 +114,7 @@ func (c *ExecClient) run(ctx context.Context, args ...string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
 }
 
 func (c *ExecClient) ListClients(ctx context.Context) ([]ClientInfo, error) {
@@ -369,10 +379,10 @@ func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target strin
 	return content, cursorX, cursorY, nil
 }
 
-// CapturePaneANSIRange captures a range of pane content with ANSI escape codes.
-func (c *ExecClient) CapturePaneANSIRange(ctx context.Context, target string, start, end int) (string, error) {
-	return c.run(ctx, "capture-pane", "-t", target, "-ep",
-		"-S", strconv.Itoa(start), "-E", strconv.Itoa(end))
+// CapturePaneANSIHistory captures from the oldest history line to the
+// current bottom in one operation ("-" is tmux's start-of-history sentinel).
+func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) (string, error) {
+	return c.runRaw(ctx, "capture-pane", "-t", target, "-ep", "-S", "-")
 }
 
 func (c *ExecClient) SendKeys(ctx context.Context, target string, keys ...string) error {

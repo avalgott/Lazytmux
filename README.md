@@ -103,7 +103,7 @@ All keystrokes are forwarded to the session's active pane. The screen is a captu
 
 ### Scroll mode
 
-Inside fullscreen, `Ctrl+V` (or the mouse wheel) switches to scrollback browsing — the pane's history replaces the live view. Keys are no longer forwarded while browsing.
+Inside fullscreen, `Ctrl+V` (or the mouse wheel) switches to scrollback browsing — the pane's history replaces the live view. Keys are no longer forwarded while browsing. The history is snapshotted once when the mode is entered and browsed in memory, so output produced while browsing does not shift the view; re-enter scroll mode to pick up new output.
 
 | Key | Action |
 |-----|--------|

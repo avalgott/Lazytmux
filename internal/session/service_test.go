@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,6 +55,7 @@ func TestServiceListNoServerIsEmpty(t *testing.T) {
 }
 
 func TestServiceCreate(t *testing.T) {
+	t.Setenv("SHELL", "/bin/bash")
 	mock := tmux.NewMockClient()
 	svc := NewService(mock)
 
@@ -71,11 +73,14 @@ func TestServiceCreate(t *testing.T) {
 
 	// The command runs inside an interactive shell wrapper so Ctrl+C cannot
 	// kill the pane (and with it the session). The user's command lives in a
-	// self-deleting temp script.
-	assert.Contains(t, opts.Command, `exec "$SHELL" -lic 'source /tmp/lazytmux-cmd-`)
+	// self-deleting temp script under /tmp.
+	assert.Contains(t, opts.Command, `exec "$SHELL" -lic '. /tmp/lazytmux-cmd-`)
 	assert.Contains(t, opts.Command, `; exec "$SHELL"'`)
+	assert.Equal(t, "/bin/bash", opts.Env["SHELL"], "the resolved shell is pinned into the session environment")
 
-	script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic 'source `), `; exec "$SHELL"'`)
+	script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic '. `), `; exec "$SHELL"'`)
+	assert.True(t, strings.HasPrefix(script, "/tmp/lazytmux-cmd-"), "script must live directly under /tmp, not TMPDIR")
+
 	// The mock never runs the session, so the script's self-delete line never
 	// fires — remove it at test end.
 	t.Cleanup(func() { _ = os.Remove(script) })
@@ -86,18 +91,82 @@ func TestServiceCreate(t *testing.T) {
 	assert.Contains(t, string(data), "\nssh devbox\n")
 }
 
+func TestServiceCreateUsesFishSourceKeyword(t *testing.T) {
+	mock := tmux.NewMockClient()
+	svc := NewService(mock)
+
+	t.Setenv("SHELL", "/usr/bin/fish")
+	err := svc.Create(context.Background(), CreateOpts{Name: "x", Command: "top"})
+	require.NoError(t, err)
+
+	opts := mock.LastNewSessionOpts
+	assert.Contains(t, opts.Command, `-lic 'source /tmp/lazytmux-cmd-`, "fish uses `source`, not `.`")
+	assert.Equal(t, "/usr/bin/fish", opts.Env["SHELL"], "the resolved fish path is pinned into the session environment")
+	t.Cleanup(func() {
+		script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic 'source `), `; exec "$SHELL"'`)
+		_ = os.Remove(script)
+	})
+}
+
+func TestServiceCreateRejectsUnsupportedShell(t *testing.T) {
+	mock := tmux.NewMockClient()
+	svc := NewService(mock)
+
+	// Snapshot the matching file set before the call, so unrelated
+	// concurrently-running instances cannot make the cleanup check flaky.
+	before, globErr := filepath.Glob("/tmp/lazytmux-cmd-*")
+	require.NoError(t, globErr)
+
+	t.Setenv("SHELL", "/bin/csh")
+	err := svc.Create(context.Background(), CreateOpts{Name: "x", Command: "top"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not supported")
+
+	// No session was created and the temp script was cleaned up.
+	assert.Empty(t, mock.Infos)
+	after, globErr := filepath.Glob("/tmp/lazytmux-cmd-*")
+	require.NoError(t, globErr)
+	assert.Equal(t, before, after, "the rejected shell must not leave scripts behind")
+}
+
+func TestServiceCreateIgnoresTMPDIR(t *testing.T) {
+	mock := tmux.NewMockClient()
+	svc := NewService(mock)
+
+	// A hostile TMPDIR must not affect the wrapper (the script always goes
+	// to /tmp, and the path is interpolated unquoted into single quotes).
+	t.Setenv("SHELL", "/bin/bash")
+	t.Setenv("TMPDIR", "/tmp with spaces; rm -rf")
+	err := svc.Create(context.Background(), CreateOpts{Name: "x", Command: "top"})
+	require.NoError(t, err)
+
+	opts := mock.LastNewSessionOpts
+	assert.Contains(t, opts.Command, ". /tmp/lazytmux-cmd-")
+	assert.NotContains(t, opts.Command, "with spaces")
+	t.Cleanup(func() {
+		script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic '. `), `; exec "$SHELL"'`)
+		_ = os.Remove(script)
+	})
+}
+
 func TestServiceCreateCleansUpScriptOnFailure(t *testing.T) {
+	t.Setenv("SHELL", "/bin/bash")
 	mock := tmux.NewMockClient()
 	mock.ErrNewSession = assert.AnError
 	svc := NewService(mock)
+
+	// Snapshot the matching file set before the call, so unrelated
+	// concurrently-running instances cannot make the cleanup check flaky.
+	before, globErr := filepath.Glob("/tmp/lazytmux-cmd-*")
+	require.NoError(t, globErr)
 
 	err := svc.Create(context.Background(), CreateOpts{Name: "x", Command: "top"})
 	assert.ErrorIs(t, err, assert.AnError)
 
 	// The temp script must be removed when the session could not be created.
-	matches, err := filepath.Glob("/tmp/lazytmux-cmd-*")
-	require.NoError(t, err)
-	assert.Empty(t, matches, "no leftover command scripts")
+	after, globErr := filepath.Glob("/tmp/lazytmux-cmd-*")
+	require.NoError(t, globErr)
+	assert.Equal(t, before, after, "no leftover command scripts")
 }
 
 func TestServiceCreateShellSession(t *testing.T) {
@@ -253,4 +322,55 @@ func TestValidateName(t *testing.T) {
 			assert.NoError(t, err, "name %q should be accepted", c.name)
 		}
 	}
+}
+
+// TestShellWrapperExecutesUnderPOSIX runs the generated wrapper in a real
+// /bin/sh: the user command must run and a fresh shell must take over.
+func TestShellWrapperExecutesUnderPOSIX(t *testing.T) {
+	t.Setenv("SHELL", "/bin/sh")
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "cmd.sh")
+	require.NoError(t, os.WriteFile(script, []byte("echo WRAPPER-RAN\n"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sink"), []byte(""), 0o600))
+
+	wrapper, sessionEnv, err := buildShellWrapper(script)
+	require.NoError(t, err)
+	assert.Equal(t, "/bin/sh", sessionEnv["SHELL"])
+
+	// Run exactly as tmux would: sh -c '<wrapper>' with stdin from a file
+	// and the pinned SHELL in the environment.
+	cmd := exec.Command("sh", "-c", wrapper)
+	cmd.Env = append(os.Environ(), "SHELL="+sessionEnv["SHELL"])
+	cmd.Stdin = strings.NewReader("echo SHELL-ALIVE; exit\n")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "wrapper output: %s", out)
+	assert.Contains(t, string(out), "WRAPPER-RAN")
+	assert.Contains(t, string(out), "SHELL-ALIVE", "the relaunched shell must run")
+}
+
+// TestShellWrapperExecutesUnderFish runs the generated wrapper in a real
+// fish shell when one is installed (the wrapper template is fish-specific).
+func TestShellWrapperExecutesUnderFish(t *testing.T) {
+	fish, err := exec.LookPath("fish")
+	if err != nil {
+		t.Skip("fish is not installed")
+	}
+	t.Setenv("SHELL", fish)
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "cmd.sh")
+	require.NoError(t, os.WriteFile(script, []byte("echo WRAPPER-RAN\n"), 0o700))
+
+	wrapper, sessionEnv, err := buildShellWrapper(script)
+	require.NoError(t, err)
+	assert.Equal(t, fish, sessionEnv["SHELL"])
+
+	cmd := exec.Command("sh", "-c", wrapper)
+	cmd.Env = append(os.Environ(), "SHELL="+sessionEnv["SHELL"])
+	cmd.Stdin = strings.NewReader("echo SHELL-ALIVE; exit\n")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "wrapper output: %s", out)
+	assert.Contains(t, string(out), "WRAPPER-RAN")
+	assert.Contains(t, string(out), "SHELL-ALIVE", "the relaunched fish shell must run")
 }

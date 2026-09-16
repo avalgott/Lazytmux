@@ -30,6 +30,7 @@ type fakeProvider struct {
 	pastes       map[string]string   // session -> pasted text
 	scrollRanges []scrollRange       // (start,end) pairs passed to CaptureScrollback
 	history      int                 // value returned by HistorySize
+	paneHeight   int                 // value returned by PaneHeight
 	err          error
 }
 
@@ -72,19 +73,17 @@ func (f *fakeProvider) Capture(_ context.Context, _ string, _, _ int) (session.P
 	return f.captured, f.err
 }
 
-func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string, start, end int) (session.Preview, error) {
+func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string) (session.Preview, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	start := -f.history
+	end := f.paneHeight - 1
 	f.scrollRanges = append(f.scrollRanges, scrollRange{start, end})
 	var sb strings.Builder
 	for i := start; i <= end; i++ {
 		fmt.Fprintf(&sb, "line %d\n", i)
 	}
 	return session.Preview{Content: sb.String()}, f.err
-}
-
-func (f *fakeProvider) HistorySize(_ context.Context, _ string) (int, error) {
-	return f.history, f.err
 }
 
 func (f *fakeProvider) SendKeys(_ context.Context, name string, keys ...string) error {
@@ -539,30 +538,49 @@ func TestApplySessionRefreshClearsStaleList(t *testing.T) {
 
 func TestScrollStateNavigation(t *testing.T) {
 	ss := &ScrollState{}
-	ss.Enter(100, 40, 20, 80) // 100 history lines + 40 visible, 20-line viewport
-
-	// Enter starts at the bottom (live view): pos = 140-20 = 120,
-	// capture range = [120-100, 120-100+19] = [20, 39].
-	assert.Equal(t, 120, ss.pos)
-	fetch := func(start, end int) ([]string, error) {
-		return []string{fmt.Sprintf("%d-%d", start, end)}, nil
+	ss.Enter(20, 80) // 20-line viewport
+	// Simulate the snapshot load: 40 lines total.
+	ss.lines = make([]string, 40)
+	for i := range ss.lines {
+		ss.lines[i] = fmt.Sprintf("line-%02d", i)
 	}
-	assert.True(t, ss.setPos(120, fetch))
+	ss.total = 40
+	ss.loaded = true
 
-	ss.Move(-5, fetch)
-	assert.Equal(t, 115, ss.pos)
-	ss.Top(fetch)
-	assert.Equal(t, 0, ss.pos)
-	ss.Move(-1, fetch)
-	assert.Equal(t, 0, ss.pos, "cannot scroll above the oldest line")
-	ss.Bottom(fetch)
-	assert.Equal(t, 120, ss.pos)
-	ss.Page(-1, fetch)
-	assert.Equal(t, 110, ss.pos, "page = half the viewport")
+	// Enter starts at the live view: the viewport shows the last 20 lines.
+	assert.Equal(t, 0, ss.offsetFromBottom)
+	vp := ss.viewport()
+	assert.Len(t, vp, 20)
+	assert.Equal(t, "line-20", vp[0])
+	assert.Equal(t, "line-39", vp[19])
+
+	// Scrolling up by 5 shows lines 15-34.
+	ss.Move(-5)
+	vp = ss.viewport()
+	assert.Equal(t, "line-15", vp[0])
+	assert.Equal(t, "line-34", vp[19])
+
+	// Top = oldest line; over-scrolling clamps.
+	ss.Top()
+	assert.Equal(t, 20, ss.offsetFromBottom)
+	assert.Equal(t, "line-00", ss.viewport()[0])
+	ss.Move(-1)
+	assert.Equal(t, 20, ss.offsetFromBottom, "cannot scroll above the oldest line")
+
+	// Bottom returns to the live view; Page moves half a viewport.
+	ss.Bottom()
+	assert.Equal(t, 0, ss.offsetFromBottom)
+	ss.Page(-1)
+	assert.Equal(t, 10, ss.offsetFromBottom, "page = half the viewport")
+
+	// The snapshot is frozen: pane-side history changes never alter the
+	// viewport (which is exactly why the snapshot exists).
+	assert.Equal(t, "line-10", ss.viewport()[0])
+	assert.Equal(t, "line-10", ss.viewport()[0], "viewport is stable under pane output")
 }
 
 func TestScrollModeKeyHandling(t *testing.T) {
-	p := &fakeProvider{history: 50}
+	p := &fakeProvider{history: 50, paneHeight: 20}
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
@@ -579,6 +597,13 @@ func TestScrollModeKeyHandling(t *testing.T) {
 	p.mu.Unlock()
 	assert.Empty(t, literals, "keys must not be forwarded in scroll mode")
 
+	// The async viewport fetch lands eventually (the fake captures ranges).
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.scrollRanges) > 0
+	}, time.Second, 5*time.Millisecond)
+
 	// Esc exits scroll mode and returns to live forwarding.
 	assert.True(t, editor.Edit(nil, gocui.KeyEsc, 0, 0))
 	assert.False(t, app.scroll.IsActive())
@@ -589,8 +614,29 @@ func TestScrollModeKeyHandling(t *testing.T) {
 	assert.Equal(t, "x", literals)
 }
 
+func TestScrollModeCtrlKeysDoNotForward(t *testing.T) {
+	p := &fakeProvider{history: 50, paneHeight: 20}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	app.scroll.Enter(20, 80)
+	assert.True(t, app.scroll.IsActive())
+
+	// Ctrl+O must not send EOF to the pane while browsing.
+	require.NoError(t, app.forwardEOFHandler(app.g, nil))
+
+	// Ctrl+C exits scroll mode (like Esc) instead of interrupting the pane.
+	require.NoError(t, app.ctrlCHandler(app.g, nil))
+	assert.False(t, app.scroll.IsActive())
+
+	p.mu.Lock()
+	keys := append([]string(nil), p.keys["devbox"]...)
+	p.mu.Unlock()
+	assert.Empty(t, keys, "nothing may be forwarded to the pane in scroll mode")
+}
+
 func TestScrollModeWheelAndToggle(t *testing.T) {
-	p := &fakeProvider{history: 50}
+	p := &fakeProvider{history: 50, paneHeight: 20}
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox"}}
 
@@ -598,11 +644,27 @@ func TestScrollModeWheelAndToggle(t *testing.T) {
 	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
 	assert.False(t, app.scroll.IsActive())
 
-	// Wheel in fullscreen enters scroll mode and scrolls.
+	// Wheel in fullscreen enters scroll mode and scrolls — the offset must
+	// accumulate even while the snapshot is still loading.
 	app.fullscreen.Enter("devbox")
 	require.NoError(t, app.layout(app.g))
 	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
 	assert.True(t, app.scroll.IsActive())
+	assert.Equal(t, 3, app.scroll.offsetFromBottom, "the first wheel gesture scrolls")
+
+	// Simulate the snapshot load (headless mode never runs gui.Update); the
+	// load clamps against the real total, keeping the accumulated offset.
+	app.scroll.lines = make([]string, 50)
+	for i := range app.scroll.lines {
+		app.scroll.lines[i] = fmt.Sprintf("line-%02d", i)
+	}
+	app.scroll.total = 50
+	app.scroll.loaded = true
+	app.scroll.clampOffset()
+	assert.Equal(t, 3, app.scroll.offsetFromBottom)
+
+	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
+	assert.Equal(t, 6, app.scroll.offsetFromBottom)
 
 	// Ctrl+V toggles it off.
 	require.NoError(t, app.toggleScrollHandler(app.g, nil))
@@ -610,7 +672,7 @@ func TestScrollModeWheelAndToggle(t *testing.T) {
 
 	// Exiting fullscreen also exits scroll mode.
 	app.fullscreen.Enter("devbox")
-	app.scroll.Enter(10, 10, 5, 80)
+	app.scroll.Enter(5, 80)
 	assert.True(t, app.scroll.IsActive())
 	app.exitFullScreen()
 	assert.False(t, app.scroll.IsActive())
@@ -644,4 +706,94 @@ func setInputContentView(g *gocui.Gui, name, text string) error {
 	}
 	setInputContent(v, text)
 	return nil
+}
+
+func TestScrollSnapshotStripsPhantomLine(t *testing.T) {
+	// capture-pane -p ends with a newline; it must not become an extra
+	// snapshot line (which would shift total and the bottom viewport).
+	lines := []string{"", "row-01", "row-02", ""} // includes a real blank first row
+	content := strings.Join(lines, "\n") + "\n"
+	got := splitScrollback(content, 80)
+	assert.Equal(t, lines, got, "exactly one record-terminating newline is stripped")
+}
+
+func TestScrollOffsetsAccumulateWhileLoading(t *testing.T) {
+	ss := &ScrollState{}
+	ss.Enter(20, 80) // snapshot not loaded yet
+
+	ss.Move(-5)
+	assert.Equal(t, 5, ss.offsetFromBottom, "offsets accumulate while the snapshot loads")
+
+	// The load callback clamps against the real total.
+	ss.lines = make([]string, 20)
+	ss.total = 20
+	ss.loaded = true
+	ss.clampOffset()
+	assert.Equal(t, 0, ss.offsetFromBottom, "loaded total of 20 clamps a 5-line offset")
+}
+
+func TestScrollLoadFailureExitsScrollMode(t *testing.T) {
+	p := &fakeProvider{err: assert.AnError}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	app.scroll.Enter(20, 80)
+	seq := app.scroll.seq
+
+	app.applyScrollLoad(seq, nil, assert.AnError)
+	assert.False(t, app.scroll.IsActive(), "a failed load must not strand the user in scroll mode")
+	require.NotEmpty(t, app.logs)
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "scrollback:")
+}
+
+func TestScrollLoadAppliesSnapshot(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	app.scroll.Enter(20, 80)
+	seq := app.scroll.seq
+
+	app.applyScrollLoad(seq, []string{"a", "b", "c"}, nil)
+	assert.True(t, app.scroll.IsActive())
+	assert.True(t, app.scroll.loaded)
+	assert.Equal(t, 3, app.scroll.total)
+
+	// A stale load is ignored.
+	app.applyScrollLoad(seq-1, []string{"stale"}, nil)
+	assert.Equal(t, 3, app.scroll.total, "stale loads must not overwrite the snapshot")
+}
+
+func TestScrollTopPendingWhileLoading(t *testing.T) {
+	ss := &ScrollState{}
+	ss.Enter(20, 80) // snapshot not loaded yet
+
+	// g pressed during loading must be honored once the load completes.
+	ss.Top()
+	assert.True(t, ss.pendingTop)
+
+	ss.lines = make([]string, 40)
+	ss.total = 40
+	ss.loaded = true
+	// The load callback resolves the pending request.
+	ss.pendingTop = false
+	ss.offsetFromBottom = ss.maxOffset()
+	assert.Equal(t, 20, ss.offsetFromBottom, "pending top lands on the oldest line")
+
+	// Bottom cancels a pending top.
+	ss.Enter(20, 80)
+	ss.Top()
+	ss.Bottom()
+	assert.False(t, ss.pendingTop)
+}
+
+func TestScrollPositionClampedToOne(t *testing.T) {
+	ss := &ScrollState{}
+	ss.Enter(20, 80)
+	ss.lines = []string{"a", "b"}
+	ss.total = 2
+	ss.loaded = true
+	ss.offsetFromBottom = 0
+
+	assert.Equal(t, 1, ss.position(), "short snapshots must not show position 0 or negative")
 }
