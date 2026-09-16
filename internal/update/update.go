@@ -22,6 +22,7 @@ import (
 const (
 	repoAPI         = "https://api.github.com/repos/avalgott/Lazytmux/releases/latest"
 	repoDL          = "https://github.com/avalgott/Lazytmux/releases/download"
+	userAgent       = "lazytmux"
 	downloadTimeout = 2 * time.Minute
 	maxJSONBytes    = 1 << 20 // cap the release metadata read
 )
@@ -39,32 +40,47 @@ func assetName(tag, goos, goarch string) string {
 
 // versionTriplet extracts the leading MAJOR.MINOR.PATCH from a version
 // string ("v0.1.0", "0.1.0", "v0.1.0-2-gabc1234-dirty"). ok is false when no
-// triplet is present (e.g. dev builds without tags).
-func versionTriplet(v string) (maj, min, pat int, ok bool) {
+// triplet is present (e.g. dev builds without tags). prerelease is true when
+// the version carries a real prerelease marker (rc/beta/alpha/pre...);
+// git describe suffixes like "-2-gabc1234-dirty" start with a digit and do
+// not count.
+func versionTriplet(v string) (maj, min, pat int, prerelease, ok bool) {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
-	if i := strings.IndexAny(v, "-+"); i >= 0 {
+
+	rest := ""
+	if i := strings.Index(v, "-"); i >= 0 {
+		rest = v[i:]
 		v = v[:i]
 	}
+	if i := strings.Index(v, "+"); i >= 0 {
+		v = v[:i]
+	}
+
 	parts := strings.Split(v, ".")
 	if len(parts) != 3 {
-		return 0, 0, 0, false
+		return 0, 0, 0, false, false
 	}
 	nums := [3]int{}
 	for i, p := range parts {
 		n, err := strconv.Atoi(p)
 		if err != nil {
-			return 0, 0, 0, false
+			return 0, 0, 0, false, false
 		}
 		nums[i] = n
 	}
-	return nums[0], nums[1], nums[2], true
+
+	marker := strings.TrimPrefix(rest, "-")
+	prerelease = marker != "" && (marker[0] < '0' || marker[0] > '9')
+	return nums[0], nums[1], nums[2], prerelease, true
 }
 
 // compareVersions returns -1, 0, or 1 for a < b, a == b, a > b. Versions
-// without a numeric triplet sort as older than everything.
+// without a numeric triplet sort as older than everything, and a prerelease
+// sorts below the release with the same triplet (so a binary built from
+// v0.1.0-rc.1 still updates to v0.1.0).
 func compareVersions(a, b string) int {
-	am, an, ap, aok := versionTriplet(a)
-	bm, bn, bp, bok := versionTriplet(b)
+	am, an, ap, apre, aok := versionTriplet(a)
+	bm, bn, bp, bpre, bok := versionTriplet(b)
 	switch {
 	case !aok && !bok:
 		return 0
@@ -80,6 +96,12 @@ func compareVersions(a, b string) int {
 		if pair[0] > pair[1] {
 			return 1
 		}
+	}
+	switch {
+	case apre && !bpre:
+		return -1
+	case !apre && bpre:
+		return 1
 	}
 	return 0
 }
@@ -112,7 +134,7 @@ func Run(current string) error {
 	url := fmt.Sprintf("%s/%s/%s", repoDL, tag, assetName(tag, goos, goarch))
 	fmt.Printf("updating lazytmux %s -> %s...\n", displayVersion(current), strings.TrimPrefix(tag, "v"))
 
-	resp, err := client.Get(url)
+	resp, err := getWithUserAgent(client, url)
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)
 	}
@@ -163,9 +185,20 @@ func displayVersion(v string) string {
 	return v
 }
 
+// getWithUserAgent performs a GET with an explicit product User-Agent;
+// GitHub's API rejects requests without one.
+func getWithUserAgent(client *http.Client, url string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	return client.Do(req)
+}
+
 // latestTag returns the tag of the latest GitHub release.
 func latestTag(client *http.Client) (string, error) {
-	resp, err := client.Get(repoAPI)
+	resp, err := getWithUserAgent(client, repoAPI)
 	if err != nil {
 		return "", fmt.Errorf("check for updates: %w", err)
 	}

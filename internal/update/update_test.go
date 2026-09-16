@@ -12,25 +12,29 @@ import (
 
 func TestVersionTriplet(t *testing.T) {
 	cases := []struct {
-		in       string
-		maj, min int
-		pat      int
-		ok       bool
+		in         string
+		maj, min   int
+		pat        int
+		prerelease bool
+		ok         bool
 	}{
-		{"v0.1.0", 0, 1, 0, true},
-		{"0.1.0", 0, 1, 0, true},
-		{"v0.1.0-2-gabc1234-dirty", 0, 1, 0, true},
-		{"v1.12.3", 1, 12, 3, true},
-		{"dev", 0, 0, 0, false},
-		{"abc1234-dirty", 0, 0, 0, false},
-		{"v1.2", 0, 0, 0, false},
-		{"", 0, 0, 0, false},
+		{"v0.1.0", 0, 1, 0, false, true},
+		{"0.1.0", 0, 1, 0, false, true},
+		{"v0.1.0-2-gabc1234-dirty", 0, 1, 0, false, true},
+		{"v0.1.0-rc.1", 0, 1, 0, true, true},
+		{"v0.2.0-beta", 0, 2, 0, true, true},
+		{"v1.12.3", 1, 12, 3, false, true},
+		{"dev", 0, 0, 0, false, false},
+		{"abc1234-dirty", 0, 0, 0, false, false},
+		{"v1.2", 0, 0, 0, false, false},
+		{"", 0, 0, 0, false, false},
 	}
 	for _, c := range cases {
-		maj, min, pat, ok := versionTriplet(c.in)
+		maj, min, pat, pre, ok := versionTriplet(c.in)
 		assert.Equal(t, c.maj, maj, "major of %q", c.in)
 		assert.Equal(t, c.min, min, "minor of %q", c.in)
 		assert.Equal(t, c.pat, pat, "patch of %q", c.in)
+		assert.Equal(t, c.prerelease, pre, "prerelease of %q", c.in)
 		assert.Equal(t, c.ok, ok, "ok of %q", c.in)
 	}
 }
@@ -45,8 +49,11 @@ func TestCompareVersions(t *testing.T) {
 		{"v0.0.1", "v0.1.0", -1},
 		{"v0.2.0", "v0.1.0", 1},
 		{"v0.1.10", "v0.1.9", 1},
-		{"v0.1.0-2-gabc", "v0.1.0", 0}, // pre-release suffix does not count
-		{"dev", "v0.1.0", -1},          // unknown versions are older
+		{"v0.1.0-2-gabc", "v0.1.0", 0}, // git describe suffix does not count
+		{"v0.1.0-rc.1", "v0.1.0", -1},  // prereleases update to the release
+		{"v0.1.0", "v0.1.0-rc.1", 1},
+		{"v0.2.0-beta", "v0.1.0", 1},
+		{"dev", "v0.1.0", -1}, // unknown versions are older
 		{"abc1234", "v0.1.0", -1},
 		{"v0.1.0", "dev", 1},
 		{"dev", "unknown", 0},
