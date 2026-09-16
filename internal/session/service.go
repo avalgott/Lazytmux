@@ -39,6 +39,7 @@ type CreateOpts struct {
 // screen (alternate-screen panes have no saved history).
 type Preview struct {
 	Content    string
+	Full       string // raw full-pane capture (untruncated, unwindowed)
 	CursorX    int
 	CursorY    int
 	PaneHeight int
@@ -270,6 +271,7 @@ func (s *Service) Capture(ctx context.Context, name string, width, height int) (
 
 	return Preview{
 		Content: strings.Join(lines, "\n"),
+		Full:    content,
 		CursorX: cursorX,
 		CursorY: cursorY,
 	}, nil

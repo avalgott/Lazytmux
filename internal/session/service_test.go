@@ -411,3 +411,18 @@ func TestServiceForwardMouseWheel(t *testing.T) {
 	assert.Equal(t, tmux.WheelEvent{Target: "devbox", Up: true, X: 10, Y: 5}, mock.WheelEvents[0])
 	assert.Equal(t, tmux.WheelEvent{Target: "devbox", Up: false, X: 0, Y: 0}, mock.WheelEvents[1])
 }
+
+func TestServiceCaptureKeepsFullContent(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.Captured["devbox"] = strings.Join([]string{
+		"row0", "row1", strings.Repeat("w", 120),
+	}, "\n")
+
+	svc := NewService(mock)
+	preview, err := svc.Capture(context.Background(), "devbox", 20, 2)
+	require.NoError(t, err)
+	assert.Equal(t, 3, len(strings.Split(preview.Full, "\n")), "Full keeps every pane row untruncated")
+	assert.Contains(t, preview.Full, strings.Repeat("w", 120), "Full keeps full-width rows")
+	// The windowed Content remains as before (truncated to the preview size).
+	assert.NotContains(t, preview.Content, strings.Repeat("w", 120))
+}
