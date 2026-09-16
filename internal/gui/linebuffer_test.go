@@ -59,3 +59,59 @@ func TestLineBufferIgnoresEmptyFeed(t *testing.T) {
 	b.Feed("")
 	assert.Equal(t, []string{"a", "b"}, b.Snapshot())
 }
+
+func TestLineBufferInPlaceEditDoesNotGrow(t *testing.T) {
+	b := NewLineBuffer(100)
+	base := []string{"L00", "L01", "L02", "L03", "L04", "L05", "L06", "L07", "L08", "L09"}
+	b.Feed(screen(base...))
+	for i := 0; i < 20; i++ {
+		scr := append([]string(nil), base...)
+		scr[5] = "spin-" + string(rune('a'+i%26))
+		b.Feed(screen(scr...))
+	}
+	assert.Len(t, b.Snapshot(), 10, "a spinner repaint must update the tail, not append")
+	assert.Equal(t, "spin-t", b.Snapshot()[5])
+}
+
+func TestLineBufferSpinnerInTallScreen(t *testing.T) {
+	n := 63
+	base := make([]string, n)
+	for i := range base {
+		base[i] = "L" + string(rune('a'+i/26)) + string(rune('a'+i%26))
+	}
+	b := NewLineBuffer(400)
+	b.Feed(screen(base...))
+	for i := 0; i < 10; i++ {
+		scr := append([]string(nil), base...)
+		scr[40] = "spin-" + string(rune('a'+i%26))
+		b.Feed(screen(scr...))
+	}
+	assert.Len(t, b.Snapshot(), n, "an edit mid-screen in a tall pane must not append")
+}
+
+func TestLineBufferFullRedrawReplacesTail(t *testing.T) {
+	b := NewLineBuffer(100)
+	base := []string{"L00", "L01", "L02", "L03", "L04", "L05", "L06", "L07", "L08", "L09"}
+	b.Feed(screen(base...))
+	redraw := []string{"R00", "R01", "R02", "R03", "R04", "R05", "R06", "R07", "R08", "R09"}
+	b.Feed(screen(redraw...))
+	assert.Equal(t, redraw, b.Snapshot(), "a completely different screen replaces the tail")
+}
+
+func TestLineBufferScrollDownPrepends(t *testing.T) {
+	b := NewLineBuffer(100)
+	cur := []string{"L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"}
+	b.Feed(screen(cur...))
+	// The app scrolled back into its own history: one older row re-appears on top.
+	cur = append([]string{"L04"}, cur[:9]...)
+	b.Feed(screen(cur...))
+	assert.Equal(t, []string{"L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"}, b.Snapshot())
+}
+
+func TestLineBufferShorterFeedSeedsAndGrows(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("only"))
+	assert.Equal(t, []string{"only"}, b.Snapshot())
+	b.Feed(screen("only", "second"))
+	assert.Equal(t, []string{"only", "second"}, b.Snapshot())
+}

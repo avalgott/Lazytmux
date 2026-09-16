@@ -80,6 +80,9 @@ func (b *LineBuffer) update(scr []string) []string {
 // tail[d:] == scr[:n-d] with overlap at least max(2, 60% of n).
 func shiftUp(tail, scr []string) (int, bool) {
 	n := len(scr)
+	if len(tail) < n {
+		return 0, false // a shorter tail cannot align with the whole screen
+	}
 	for d := 0; d < n; d++ {
 		ov := n - d
 		if ov < max(2, n*3/5) {
@@ -95,6 +98,9 @@ func shiftUp(tail, scr []string) (int, bool) {
 // shiftDown mirrors shiftUp: tail[:n-d] == scr[d:].
 func shiftDown(tail, scr []string) (int, bool) {
 	n := len(scr)
+	if len(tail) < n {
+		return 0, false // a shorter tail cannot align with the whole screen
+	}
 	for d := 0; d < n; d++ {
 		ov := n - d
 		if ov < max(2, n*3/5) {
