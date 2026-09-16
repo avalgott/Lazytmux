@@ -73,9 +73,10 @@ func (f *fakeProvider) Capture(_ context.Context, _ string, _, _ int) (session.P
 	return f.captured, f.err
 }
 
-func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string, start, end int) (session.Preview, error) {
+func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string, start int) (session.Preview, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	end := start + f.history + f.paneHeight - 1
 	f.scrollRanges = append(f.scrollRanges, scrollRange{start, end})
 	var sb strings.Builder
 	for i := start; i <= end; i++ {
@@ -86,10 +87,6 @@ func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string, start, end
 
 func (f *fakeProvider) HistorySize(_ context.Context, _ string) (int, error) {
 	return f.history, f.err
-}
-
-func (f *fakeProvider) PaneHeight(_ context.Context, _ string) (int, error) {
-	return f.paneHeight, f.err
 }
 
 func (f *fakeProvider) SendKeys(_ context.Context, name string, keys ...string) error {
@@ -768,4 +765,38 @@ func TestScrollLoadAppliesSnapshot(t *testing.T) {
 	// A stale load is ignored.
 	app.applyScrollLoad(seq-1, []string{"stale"}, nil)
 	assert.Equal(t, 3, app.scroll.total, "stale loads must not overwrite the snapshot")
+}
+
+func TestScrollTopPendingWhileLoading(t *testing.T) {
+	ss := &ScrollState{}
+	ss.Enter(20, 80) // snapshot not loaded yet
+
+	// g pressed during loading must be honored once the load completes.
+	ss.Top()
+	assert.True(t, ss.pendingTop)
+
+	ss.lines = make([]string, 40)
+	ss.total = 40
+	ss.loaded = true
+	// The load callback resolves the pending request.
+	ss.pendingTop = false
+	ss.offsetFromBottom = ss.maxOffset()
+	assert.Equal(t, 20, ss.offsetFromBottom, "pending top lands on the oldest line")
+
+	// Bottom cancels a pending top.
+	ss.Enter(20, 80)
+	ss.Top()
+	ss.Bottom()
+	assert.False(t, ss.pendingTop)
+}
+
+func TestScrollPositionClampedToOne(t *testing.T) {
+	ss := &ScrollState{}
+	ss.Enter(20, 80)
+	ss.lines = []string{"a", "b"}
+	ss.total = 2
+	ss.loaded = true
+	ss.offsetFromBottom = 0
+
+	assert.Equal(t, 1, ss.position(), "short snapshots must not show position 0 or negative")
 }

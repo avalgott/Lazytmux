@@ -385,6 +385,13 @@ func (c *ExecClient) CapturePaneANSIRange(ctx context.Context, target string, st
 		"-S", strconv.Itoa(start), "-E", strconv.Itoa(end))
 }
 
+// CapturePaneANSIFrom captures from a start offset to the pane's current
+// bottom (-S without -E).
+func (c *ExecClient) CapturePaneANSIFrom(ctx context.Context, target string, start int) (string, error) {
+	return c.runRaw(ctx, "capture-pane", "-t", target, "-ep",
+		"-S", strconv.Itoa(start))
+}
+
 func (c *ExecClient) SendKeys(ctx context.Context, target string, keys ...string) error {
 	args := append([]string{"send-keys", "-t", target}, keys...)
 	_, err := c.run(ctx, args...)

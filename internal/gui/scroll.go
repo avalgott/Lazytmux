@@ -31,6 +31,7 @@ type ScrollState struct {
 	offsetFromBottom int      // 0 = live view; grows when scrolling up
 	lines            []string // the snapshot
 	loaded           bool
+	pendingTop       bool  // g pressed while the snapshot was still loading
 	seq              int64 // invalidates in-flight snapshot loads
 }
 
@@ -102,11 +103,24 @@ func (ss *ScrollState) Page(delta int) {
 	ss.clampOffset()
 }
 
-// Top jumps to the oldest line; Bottom to the live view.
-func (ss *ScrollState) Top() { ss.offsetFromBottom = ss.maxOffset() }
+// Top jumps to the oldest line. While the snapshot is still loading the
+// real total is unknown, so the request is recorded and honored by the load
+// callback.
+func (ss *ScrollState) Top() {
+	if !ss.loaded {
+		ss.pendingTop = true
+		ss.offsetFromBottom = 0
+		return
+	}
+	ss.pendingTop = false
+	ss.offsetFromBottom = ss.maxOffset()
+}
 
 // Bottom jumps to the live view.
-func (ss *ScrollState) Bottom() { ss.offsetFromBottom = 0 }
+func (ss *ScrollState) Bottom() {
+	ss.pendingTop = false
+	ss.offsetFromBottom = 0
+}
 
 // viewport returns the lines currently visible in the snapshot.
 func (ss *ScrollState) viewport() []string {
@@ -125,9 +139,13 @@ func (ss *ScrollState) viewport() []string {
 }
 
 // position is the 1-based line number of the first visible line, for the
-// status bar.
+// status bar. Clamped to at least 1 for snapshots shorter than the viewport.
 func (ss *ScrollState) position() int {
-	return ss.total - ss.viewH - ss.offsetFromBottom + 1
+	pos := ss.total - ss.viewH - ss.offsetFromBottom + 1
+	if pos < 1 {
+		return 1
+	}
+	return pos
 }
 
 // enterScrollMode switches fullscreen into scrollback browsing.
@@ -153,25 +171,20 @@ func (a *App) enterScrollMode() {
 	}
 	a.scroll.Enter(viewH, width)
 
-	// Load the snapshot in a goroutine: the tmux queries and the capture all
+	// Load the snapshot in a goroutine: the tmux query and the capture both
 	// run outside the event loop, and only the latest load applies.
 	a.scroll.seq++
 	seq := a.scroll.seq
 	go func() {
-		// Derive the capture range from the pane itself: the fullscreen
-		// resize runs in another goroutine and may not have completed yet,
-		// so assuming viewH visible rows can capture at stale dimensions.
 		history, err := a.svc.HistorySize(context.Background(), target)
 		if err != nil {
 			a.finishScrollLoad(seq, nil, err)
 			return
 		}
-		paneHeight, err := a.svc.PaneHeight(context.Background(), target)
-		if err != nil {
-			a.finishScrollLoad(seq, nil, err)
-			return
-		}
-		lines, err := fetchScrollbackLines(a.svc, target, width, -history, paneHeight-1)
+		// Capture from -history to tmux's current bottom sentinel (no -E):
+		// the snapshot always ends at the live bottom, even while the
+		// fullscreen resize runs concurrently.
+		lines, err := fetchScrollbackLines(a.svc, target, width, -history)
 		if err != nil {
 			a.finishScrollLoad(seq, nil, err)
 			return
@@ -207,7 +220,12 @@ func (a *App) applyScrollLoad(seq int64, lines []string, loadErr error) {
 		a.scroll.lines = lines
 		a.scroll.total = len(lines)
 		a.scroll.loaded = true
-		a.scroll.clampOffset()
+		if a.scroll.pendingTop {
+			a.scroll.pendingTop = false
+			a.scroll.offsetFromBottom = a.scroll.maxOffset()
+		} else {
+			a.scroll.clampOffset()
+		}
 	}
 }
 
@@ -218,11 +236,11 @@ func (a *App) exitScrollMode() {
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }
 
-// fetchScrollbackLines captures a range of the pane history and truncates
-// lines to the given width. Pure helper: no App state is touched, so it is
-// safe to run from a goroutine.
-func fetchScrollbackLines(svc session.Provider, target string, width, start, end int) ([]string, error) {
-	preview, err := svc.CaptureScrollback(context.Background(), target, start, end)
+// fetchScrollbackLines captures the pane history from start to the current
+// bottom and truncates lines to the given width. Pure helper: no App state
+// is touched, so it is safe to run from a goroutine.
+func fetchScrollbackLines(svc session.Provider, target string, width, start int) ([]string, error) {
+	preview, err := svc.CaptureScrollback(context.Background(), target, start)
 	if err != nil {
 		return nil, err
 	}

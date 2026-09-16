@@ -233,6 +233,17 @@ func (m *MockClient) CapturePaneANSIRange(_ context.Context, target string, star
 	return m.Captured[target], nil
 }
 
+func (m *MockClient) CapturePaneANSIFrom(_ context.Context, target string, start int) (string, error) {
+	if m.ErrCapture != nil {
+		return "", m.ErrCapture
+	}
+	key := fmt.Sprintf("%s:%d:", target, start)
+	if content, ok := m.RangeCaptures[key]; ok {
+		return content, nil
+	}
+	return m.Captured[target], nil
+}
+
 func (m *MockClient) SendKeys(_ context.Context, target string, keys ...string) error {
 	if m.ErrSendKeys != nil {
 		return m.ErrSendKeys
