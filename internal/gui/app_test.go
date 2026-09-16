@@ -956,7 +956,11 @@ func TestPreviewScrollTopWhileLoading(t *testing.T) {
 	app.previewScrollTop()
 	assert.True(t, app.previewScroll.pendingTop)
 
-	loadPreviewSnapshot(t, app, make([]string, 20))
+	// Apply the load directly (the shared helper simulates a first upward
+	// gesture, which would cancel the pending top).
+	seq := app.previewScroll.seq
+	app.applyPreviewScrollLoad(seq, make([]string, 20), nil)
+	assert.True(t, app.previewScroll.IsActive())
 	assert.Equal(t, 10, app.previewScroll.offsetFromBottom, "pending top lands on the oldest line")
 }
 
