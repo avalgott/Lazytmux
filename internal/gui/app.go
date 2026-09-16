@@ -333,14 +333,16 @@ func (a *App) clampCursor() {
 
 // moveCursor moves the selection by delta and marks the preview stale so it
 // refreshes for the newly selected session. Moving to a different session
-// returns the preview panel to its live capture.
+// returns the preview panel to its live capture; a clamped no-op (k at the
+// first session, j at the last) does not, since the selection did not change.
 func (a *App) moveCursor(delta int) {
 	if len(a.sessions) == 0 {
 		return
 	}
+	before := a.cursor
 	a.cursor += delta
 	a.clampCursor()
-	if a.previewScroll.IsActive() {
+	if a.cursor != before && a.previewScroll.IsActive() {
 		a.previewScroll.Exit()
 		a.previewScrollTarget = ""
 	}

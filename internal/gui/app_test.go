@@ -1092,3 +1092,25 @@ func TestPreviewScrollEmptySessionsNoop(t *testing.T) {
 	require.NoError(t, app.cursorMoveHandler(1)(app.g, nil))
 	assert.False(t, app.previewScroll.IsActive())
 }
+
+func TestPreviewScrollNotResetWhenCursorClamped(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "a"}, {Name: "b"}}
+	app.cursor = 0
+	app.previewScrollTarget = "a"
+	app.previewScroll.Enter(10, 78)
+	loadPreviewSnapshot(t, app, make([]string, 20))
+	app.previewScroll.offsetFromBottom = 0
+	app.focusMain = false
+
+	// k at the first session: the cursor clamps to 0 (no change), so the
+	// frozen preview must survive.
+	app.moveCursor(-1)
+	assert.Equal(t, 0, app.cursor)
+	assert.True(t, app.previewScroll.IsActive(), "a clamped no-op must not reset the preview")
+
+	// An actual session change still resets it.
+	app.moveCursor(1)
+	assert.Equal(t, 1, app.cursor)
+	assert.False(t, app.previewScroll.IsActive())
+}
