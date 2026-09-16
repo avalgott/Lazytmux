@@ -122,13 +122,14 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 	command := opts.Command
 	script := ""
+	var sessionEnv map[string]string
 	if command != "" {
 		var err error
 		script, err = writeCommandScript(command)
 		if err != nil {
 			return fmt.Errorf("write command script: %w", err)
 		}
-		command, err = buildShellWrapper(script)
+		command, sessionEnv, err = buildShellWrapper(script)
 		if err != nil {
 			_ = os.Remove(script)
 			return err
@@ -140,6 +141,7 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 		StartDir: opts.Dir,
 		Command:  command,
 		Detached: true,
+		Env:      sessionEnv,
 	})
 	if err != nil {
 		// Clean up only on failure; on success the script self-deletes when
@@ -153,35 +155,40 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 }
 
 // buildShellWrapper returns the tmux command that runs the user's command
-// inside their interactive shell, or an error for shells we cannot wrap
-// correctly. Every shell the wrapper supports gets a template that actually
-// works in it; the rest are rejected explicitly rather than running a
-// silently broken command. The path is always created directly under /tmp
-// (never os.TempDir, which honors TMPDIR and could introduce spaces or
-// metacharacters), so it is safe inside the single-quoted wrapper — same
-// trick as lazyclaude's launcher scripts.
-func buildShellWrapper(script string) (string, error) {
-	name := filepath.Base(os.Getenv("SHELL"))
-	if name == "" || name == "." {
-		// SHELL unset: the wrapper falls back to /bin/sh at runtime.
-		name = "sh"
+// inside their interactive shell, the session environment that pins that
+// shell, or an error for shells we cannot wrap correctly.
+//
+// The shell is resolved here and pinned into the new session's environment,
+// so the template selection can never diverge from the shell the pane
+// actually executes (a long-lived tmux server may carry a stale SHELL).
+// Every supported shell gets a template that works in it; the rest are
+// rejected explicitly rather than running a silently broken command. The
+// script path is always created directly under /tmp (never os.TempDir, which
+// honors TMPDIR and could introduce spaces or metacharacters), so it is safe
+// inside the single-quoted wrapper — same trick as lazyclaude's launcher
+// scripts.
+func buildShellWrapper(script string) (string, map[string]string, error) {
+	shellPath := os.Getenv("SHELL")
+	if shellPath == "" {
+		shellPath = "/bin/sh"
 	}
+	name := filepath.Base(shellPath)
+
 	// The templates are per shell family — fish does not understand POSIX
-	// ${var:-default} expansion, so each family gets its own syntax.
+	// ${var:-default} expansion, so each family gets its own syntax. SHELL is
+	// pinned via the session env, so the plain "$SHELL" reference is exact.
 	var relaunch string
 	switch name {
 	case "sh", "bash", "dash", "ksh", "zsh":
-		// ${SHELL:-/bin/sh} guards against SHELL being unset in the pane.
-		relaunch = `exec "${SHELL:-/bin/sh}" -lic '. ` + script + `; exec "${SHELL:-/bin/sh}"'`
+		relaunch = `exec "$SHELL" -lic '. ` + script + `; exec "$SHELL"'`
 	case "fish":
-		// SHELL was resolved from the environment to get here, so it is set.
 		relaunch = `exec "$SHELL" -lic 'source ` + script + `; exec "$SHELL"'`
 	case "csh", "tcsh":
-		return "", fmt.Errorf("shell %q is not supported for command sessions — use an empty command or a POSIX shell", name)
+		return "", nil, fmt.Errorf("shell %q is not supported for command sessions — use an empty command or a POSIX shell", name)
 	default:
-		return "", fmt.Errorf("unknown shell %q — command sessions support sh, bash, dash, ksh, zsh, and fish", name)
+		return "", nil, fmt.Errorf("unknown shell %q — command sessions support sh, bash, dash, ksh, zsh, and fish", name)
 	}
-	return relaunch, nil
+	return relaunch, map[string]string{"SHELL": shellPath}, nil
 }
 
 // writeCommandScript writes the user's command to a temp file whose first

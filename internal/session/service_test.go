@@ -74,10 +74,11 @@ func TestServiceCreate(t *testing.T) {
 	// The command runs inside an interactive shell wrapper so Ctrl+C cannot
 	// kill the pane (and with it the session). The user's command lives in a
 	// self-deleting temp script under /tmp.
-	assert.Contains(t, opts.Command, `exec "${SHELL:-/bin/sh}" -lic '. /tmp/lazytmux-cmd-`)
-	assert.Contains(t, opts.Command, `; exec "${SHELL:-/bin/sh}"'`)
+	assert.Contains(t, opts.Command, `exec "$SHELL" -lic '. /tmp/lazytmux-cmd-`)
+	assert.Contains(t, opts.Command, `; exec "$SHELL"'`)
+	assert.Equal(t, "/bin/bash", opts.Env["SHELL"], "the resolved shell is pinned into the session environment")
 
-	script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "${SHELL:-/bin/sh}" -lic '. `), `; exec "${SHELL:-/bin/sh}"'`)
+	script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic '. `), `; exec "$SHELL"'`)
 	assert.True(t, strings.HasPrefix(script, "/tmp/lazytmux-cmd-"), "script must live directly under /tmp, not TMPDIR")
 
 	// The mock never runs the session, so the script's self-delete line never
@@ -100,6 +101,7 @@ func TestServiceCreateUsesFishSourceKeyword(t *testing.T) {
 
 	opts := mock.LastNewSessionOpts
 	assert.Contains(t, opts.Command, `-lic 'source /tmp/lazytmux-cmd-`, "fish uses `source`, not `.`")
+	assert.Equal(t, "/usr/bin/fish", opts.Env["SHELL"], "the resolved fish path is pinned into the session environment")
 	t.Cleanup(func() {
 		script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic 'source `), `; exec "$SHELL"'`)
 		_ = os.Remove(script)
@@ -142,12 +144,13 @@ func TestServiceCreateIgnoresTMPDIR(t *testing.T) {
 	assert.Contains(t, opts.Command, ". /tmp/lazytmux-cmd-")
 	assert.NotContains(t, opts.Command, "with spaces")
 	t.Cleanup(func() {
-		script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "${SHELL:-/bin/sh}" -lic '. `), `; exec "${SHELL:-/bin/sh}"'`)
+		script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic '. `), `; exec "$SHELL"'`)
 		_ = os.Remove(script)
 	})
 }
 
 func TestServiceCreateCleansUpScriptOnFailure(t *testing.T) {
+	t.Setenv("SHELL", "/bin/bash")
 	mock := tmux.NewMockClient()
 	mock.ErrNewSession = assert.AnError
 	svc := NewService(mock)
@@ -331,11 +334,14 @@ func TestShellWrapperExecutesUnderPOSIX(t *testing.T) {
 	require.NoError(t, os.WriteFile(script, []byte("echo WRAPPER-RAN\n"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "sink"), []byte(""), 0o600))
 
-	wrapper, err := buildShellWrapper(script)
+	wrapper, sessionEnv, err := buildShellWrapper(script)
 	require.NoError(t, err)
+	assert.Equal(t, "/bin/sh", sessionEnv["SHELL"])
 
-	// Run exactly as tmux would: sh -c '<wrapper>' with stdin from a file.
+	// Run exactly as tmux would: sh -c '<wrapper>' with stdin from a file
+	// and the pinned SHELL in the environment.
 	cmd := exec.Command("sh", "-c", wrapper)
+	cmd.Env = append(os.Environ(), "SHELL="+sessionEnv["SHELL"])
 	cmd.Stdin = strings.NewReader("echo SHELL-ALIVE; exit\n")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "wrapper output: %s", out)
@@ -356,10 +362,12 @@ func TestShellWrapperExecutesUnderFish(t *testing.T) {
 	script := filepath.Join(dir, "cmd.sh")
 	require.NoError(t, os.WriteFile(script, []byte("echo WRAPPER-RAN\n"), 0o700))
 
-	wrapper, err := buildShellWrapper(script)
+	wrapper, sessionEnv, err := buildShellWrapper(script)
 	require.NoError(t, err)
+	assert.Equal(t, fish, sessionEnv["SHELL"])
 
 	cmd := exec.Command("sh", "-c", wrapper)
+	cmd.Env = append(os.Environ(), "SHELL="+sessionEnv["SHELL"])
 	cmd.Stdin = strings.NewReader("echo SHELL-ALIVE; exit\n")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "wrapper output: %s", out)

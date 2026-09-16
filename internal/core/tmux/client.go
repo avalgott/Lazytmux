@@ -58,11 +58,6 @@ type Client interface {
 	// Negative values count from the end of the scrollback buffer.
 	CapturePaneANSIRange(ctx context.Context, target string, start, end int) (string, error)
 
-	// CapturePaneANSIFrom captures pane content from a start line offset to
-	// the pane's current bottom (-S without -E), with ANSI escape codes.
-	// Using tmux's bottom sentinel keeps the capture consistent with the
-	// pane's live geometry even when it is being resized concurrently.
-	CapturePaneANSIFrom(ctx context.Context, target string, start int) (string, error)
 
 	// CapturePaneANSIHistory captures the whole pane history from tmux's
 	// oldest-history sentinel ("-S -") to the current bottom in one
