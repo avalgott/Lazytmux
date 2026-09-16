@@ -79,6 +79,7 @@ type App struct {
 	logs                   []logEntry  // recent status/error messages, shown in the logs panel
 	refreshBusy            atomic.Bool // true while a background session refresh is in flight
 	attachTarget           string      // session to attach to; set on Enter, main() acts on it
+	buffers                map[string]*LineBuffer
 }
 
 // logEntry is one line in the logs panel.
@@ -126,6 +127,7 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 		fullscreen:    &FullScreenState{},
 		scroll:        &ScrollState{},
 		previewScroll: &ScrollState{},
+		buffers:       make(map[string]*LineBuffer),
 	}
 
 	g.Highlight = true
@@ -251,6 +253,20 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 	}
 	a.sessions = sessions
 
+	// Drop synthetic scrollback buffers of sessions that no longer exist.
+	for name := range a.buffers {
+		found := false
+		for _, s := range a.sessions {
+			if s.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			delete(a.buffers, name)
+		}
+	}
+
 	// Leave fullscreen automatically when the target session disappeared
 	// (e.g. its shell exited, or it was killed elsewhere).
 	if a.fullscreen.IsActive() {
@@ -363,6 +379,35 @@ func (a *App) setStatus(msg string) {
 // setError appends an error message to the log.
 func (a *App) setError(msg string) {
 	a.appendLog(logEntry{at: time.Now(), msg: msg, isErr: true})
+}
+
+// scrollBufferCap bounds each session's synthetic scrollback buffer (the
+// user asked for "a couple of hundred lines"; 400 is comfortably within
+// memory limits at pane-line sizes).
+const scrollBufferCap = 400
+
+// feedBuffer appends one full-pane capture to the session's synthetic
+// scrollback buffer, creating it on first use. Called from the capture
+// completion goroutine; LineBuffer locks internally.
+func (a *App) feedBuffer(name, content string) {
+	if name == "" || content == "" {
+		return
+	}
+	a.bufferFor(name).Feed(content)
+}
+
+// bufferFor returns the session's synthetic scrollback buffer, creating an
+// empty one on first use. LineBuffer locks internally.
+func (a *App) bufferFor(name string) *LineBuffer {
+	if a.buffers == nil {
+		a.buffers = make(map[string]*LineBuffer)
+	}
+	b := a.buffers[name]
+	if b == nil {
+		b = NewLineBuffer(scrollBufferCap)
+		a.buffers[name] = b
+	}
+	return b
 }
 
 // appendLog adds an entry to the log, trimming the oldest entries when the

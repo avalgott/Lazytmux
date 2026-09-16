@@ -1338,3 +1338,38 @@ func TestFullscreenScrollStaleLoadKeepsHint(t *testing.T) {
 	app.applyScrollLoad(app.scroll.seq-1, make([]string, 25), 20, nil)
 	assert.True(t, app.fullscreenNoScrollback, "a stale load must not clear the no-scrollback hint")
 }
+
+// --- Synthetic scrollback buffers ---
+
+func TestFeedBufferAccumulatesPerSession(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.feedBuffer("devbox", "row-a\nrow-b\nrow-c")
+	app.feedBuffer("devbox", "row-b\nrow-c\nrow-d")
+	assert.Equal(t, []string{"row-a", "row-b", "row-c", "row-d"}, app.bufferFor("devbox").Snapshot())
+}
+
+func TestFeedBufferSeparatesSessions(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.feedBuffer("devbox", "one")
+	app.feedBuffer("logs", "two")
+	assert.Equal(t, []string{"one"}, app.bufferFor("devbox").Snapshot())
+	assert.Equal(t, []string{"two"}, app.bufferFor("logs").Snapshot())
+}
+
+func TestBuffersPrunedWhenSessionsDisappear(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.feedBuffer("gone", "content")
+	app.applySessionRefresh([]session.Info{{Name: "alive"}}, nil)
+	assert.NotContains(t, app.buffers, "gone", "buffers of vanished sessions are dropped")
+}
+
+func TestCaptureCompletionFeedsBuffer(t *testing.T) {
+	p := &fakeProvider{captured: session.Preview{Content: "live", Full: "live\nstreamed"}}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+
+	app.renderPreviewCapture("devbox", 0, 80, 24, session.Preview{Content: "live", Full: "live\nstreamed"}, nil)
+
+	assert.Equal(t, []string{"live", "streamed"}, app.bufferFor("devbox").Snapshot())
+}

@@ -77,16 +77,7 @@ func (a *App) renderPreview(v *gocui.View) {
 		cursorSnapshot := a.cursor
 		go func() {
 			result, err := a.svc.Capture(context.Background(), name, previewW, previewH)
-			a.preview.Lock()
-			if err == nil {
-				a.preview.Update(result.Content, cursorSnapshot, result.CursorX, result.CursorY)
-			} else {
-				// Failed capture (e.g. session died between refresh cycles) —
-				// mark fetched so we don't retry on every render.
-				a.preview.MarkFetched(cursorSnapshot)
-			}
-			a.preview.Unlock()
-			a.g.Update(func(*gocui.Gui) error { return nil })
+			a.renderPreviewCapture(name, cursorSnapshot, previewW, previewH, result, err)
 		}()
 	}
 
@@ -103,6 +94,24 @@ func (a *App) renderPreview(v *gocui.View) {
 		fmt.Fprintln(v, "")
 		fmt.Fprintf(v, "  %s\n", presentation.Dim+sess.Path+presentation.Reset)
 	}
+}
+
+// renderPreviewCapture installs a completed live capture into the preview
+// cache and feeds the session's synthetic scrollback buffer. Split out from
+// the fetch goroutine so tests can drive it directly (headless mode never
+// runs gui.Update).
+func (a *App) renderPreviewCapture(name string, cursorSnapshot, previewW, previewH int, result session.Preview, err error) {
+	a.preview.Lock()
+	if err == nil {
+		a.preview.Update(result.Content, cursorSnapshot, result.CursorX, result.CursorY)
+	} else {
+		// Failed capture (e.g. session died between refresh cycles) —
+		// mark fetched so we don't retry on every render.
+		a.preview.MarkFetched(cursorSnapshot)
+	}
+	a.preview.Unlock()
+	a.feedBuffer(name, result.Full)
+	a.g.Update(func(*gocui.Gui) error { return nil })
 }
 
 // renderOptionsBar draws the keybinding hints. While the dashboard preview
