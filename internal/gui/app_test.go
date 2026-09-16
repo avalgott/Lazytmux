@@ -922,18 +922,42 @@ func TestPreviewScrollMoveExitsAtBottom(t *testing.T) {
 	assert.Equal(t, "", app.previewScrollTarget)
 }
 
-func TestPreviewScrollLoadAtBottomExits(t *testing.T) {
+func TestPreviewScrollLoadAtBottomStays(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.previewScrollTarget = "devbox"
 	app.previewScroll.Enter(10, 78)
 	seq := app.previewScroll.seq
 
-	// The first gesture pointed at the live bottom (offset 0) while the
-	// snapshot was loading: the load must return to the live capture.
-	app.applyPreviewScrollLoad(seq, make([]string, 20), nil)
-	assert.False(t, app.previewScroll.IsActive(), "a load landing at the live bottom exits scroll mode")
-	assert.Equal(t, "", app.previewScrollTarget)
+	// A snapshot shorter than the viewport clamps the offset to the bottom;
+	// the mode stays active (G or a downward gesture returns to live).
+	app.applyPreviewScrollLoad(seq, make([]string, 5), nil)
+	assert.True(t, app.previewScroll.IsActive(), "small snapshots keep scroll mode active at the bottom")
+	assert.True(t, app.previewScroll.loaded)
+	assert.Equal(t, 0, app.previewScroll.offsetFromBottom)
+}
+
+func TestDashboardWheelScrollsPreview(t *testing.T) {
+	p := &fakeProvider{history: 50, paneHeight: 20}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	require.NoError(t, app.layout(app.g))
+
+	// Wheel-up enters scroll mode and scrolls up.
+	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
+	assert.True(t, app.previewScroll.IsActive())
+	loadPreviewSnapshot(t, app, make([]string, 40))
+	// 40-line snapshot, 37-row viewport: the accumulated offset clamps to 3.
+	assert.Equal(t, 3, app.previewScroll.offsetFromBottom)
+
+	// Wheel-down scrolls towards the live bottom and exits there.
+	app.previewScroll.offsetFromBottom = 0
+	require.NoError(t, app.wheelHandler(3)(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive(), "wheel-down at the live bottom returns to live")
+
+	// Wheel-down while inactive does nothing (no expensive load).
+	require.NoError(t, app.wheelHandler(3)(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive())
 }
 
 func TestPreviewScrollGExits(t *testing.T) {

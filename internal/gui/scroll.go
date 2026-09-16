@@ -358,17 +358,17 @@ func (a *App) restartPreviewScrollLoad() {
 }
 
 // applyPreviewScrollLoad is the dashboard event-loop applier; a failed load
-// logs the reason and returns the panel to the live capture. A successful
-// load that lands at the live bottom (the first gesture was j/PgDn while the
-// snapshot was still loading) also returns to the live capture, so the
-// outcome does not depend on load timing.
+// logs the reason and returns the panel to the live capture.
+//
+// A load that clamps the offset to the bottom (e.g. a pane smaller than the
+// viewport, with a snapshot shorter than it) keeps the mode active — the
+// panel shows the frozen snapshot at the bottom until G or a downward
+// gesture returns to live. Downward gestures while inactive are already
+// filtered before entering, so no expensive load can be started just to
+// exit again.
 func (a *App) applyPreviewScrollLoad(seq int64, lines []string, loadErr error) {
 	if err := a.applyScrollLoadState(a.previewScroll, seq, lines, loadErr); err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))
-		a.exitPreviewScroll()
-		return
-	}
-	if a.previewScroll.IsActive() && a.previewScroll.loaded && a.previewScroll.offsetFromBottom == 0 {
 		a.exitPreviewScroll()
 	}
 }

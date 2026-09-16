@@ -342,16 +342,37 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 }
 
 // wheelHandler handles the mouse wheel: in fullscreen it enters scroll mode
-// (if needed) and scrolls; elsewhere it is ignored.
+// (if needed) and scrolls; on the dashboard it scrolls the preview panel.
 func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 	return func(g *gocui.Gui, v *gocui.View) error {
-		if !a.fullscreen.IsActive() {
+		if a.fullscreen.IsActive() {
+			if !a.scroll.IsActive() {
+				a.enterScrollMode()
+			}
+			a.scroll.Move(delta)
+			a.g.Update(func(*gocui.Gui) error { return nil })
 			return nil
 		}
-		if !a.scroll.IsActive() {
-			a.enterScrollMode()
+		// Dashboard: the wheel scrolls the preview panel.
+		if a.dialog != DialogNone {
+			return nil
 		}
-		a.scroll.Move(delta)
+		// Wheel-down at the live bottom has nothing to browse; entering would
+		// start a full history load that immediately exits again.
+		if !a.previewScroll.IsActive() && delta > 0 {
+			return nil
+		}
+		if !a.previewScroll.IsActive() {
+			a.enterPreviewScroll()
+		}
+		if !a.previewScroll.IsActive() {
+			return nil
+		}
+		a.previewScroll.Move(delta)
+		if a.previewScroll.loaded && a.previewScroll.offsetFromBottom == 0 {
+			a.exitPreviewScroll()
+			return nil
+		}
 		a.g.Update(func(*gocui.Gui) error { return nil })
 		return nil
 	}
