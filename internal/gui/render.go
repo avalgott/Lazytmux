@@ -123,7 +123,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 		// retry). Without the clear, a session recreated under the same name
 		// and cursor index would inherit the old pane's screen.
 		a.preview.ClearContent()
-		a.preview.MarkFetched(name, cursorSnapshot)
+		a.preview.MarkFetched(name, gen, cursorSnapshot)
 		a.preview.Unlock()
 		a.g.Update(func(*gocui.Gui) error { return nil })
 		return
@@ -133,7 +133,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 	} else {
 		// Failed capture (e.g. session died between refresh cycles) —
 		// mark fetched so we don't retry on every render.
-		a.preview.MarkFetched(name, cursorSnapshot)
+		a.preview.MarkFetched(name, gen, cursorSnapshot)
 	}
 	a.preview.Unlock()
 	a.feedBufferIfCurrent(name, gen, result.Full)

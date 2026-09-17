@@ -1749,7 +1749,7 @@ func TestMarkFetchedClearsForeignContent(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.preview.Lock()
 	app.preview.Update("session-A", "A-CONTENT", 0, 0, 0, 0)
-	app.preview.MarkFetched("session-B", 0)
+	app.preview.MarkFetched("session-B", 0, 0)
 	assert.Equal(t, "", app.preview.Content(), "a failed fetch for another session must not retag the old content")
 	app.preview.Unlock()
 }
@@ -1758,7 +1758,7 @@ func TestMarkFetchedKeepsOwnContent(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.preview.Lock()
 	app.preview.Update("session-A", "A-CONTENT", 0, 0, 0, 0)
-	app.preview.MarkFetched("session-A", 0)
+	app.preview.MarkFetched("session-A", 0, 0)
 	assert.Equal(t, "A-CONTENT", app.preview.Content(), "a failed fetch for the same session keeps the cached content")
 	app.preview.Unlock()
 }
@@ -1873,4 +1873,26 @@ func TestUnboundBufferBoundWhenIdentityUnchanged(t *testing.T) {
 
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1"}}, nil)
 	assert.NotNil(t, app.bufferLookup("devbox"), "an unbound buffer binds when the session identity did not change")
+}
+
+// --- Copilot round-8 fixes: repeated content, cap reseed, fetch throttle, wheel coords ---
+
+func TestMarkFetchedRecordsGeneration(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.preview.Lock()
+	app.preview.MarkFetched("devbox", 7, 0)
+	assert.Equal(t, uint64(7), app.preview.Gen(), "the capture generation rides through a failed fetch so the throttle holds")
+	app.preview.Unlock()
+}
+
+func TestFullscreenWheelForwardUsesEventCoords(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, cursorX: 80, cursorY: 40}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+
+	app.wheelHandlerAt(-3, 12, 7)
+	require.Len(t, p.wheelSnapshot(), 1)
+	assert.Equal(t, wheelCall{name: "devbox", up: true, x: 12, y: 7}, p.wheelSnapshot()[0],
+		"the forwarded event carries the mouse position, not the pane cursor")
 }

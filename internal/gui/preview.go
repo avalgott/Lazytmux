@@ -97,11 +97,12 @@ func (pc *PreviewCache) InvalidateTimestamp() {
 // captured for a different session is dropped — retagging it would display
 // one session's screen under another's name.
 // Caller must hold lock.
-func (pc *PreviewCache) MarkFetched(name string, cursorIdx int) {
+func (pc *PreviewCache) MarkFetched(name string, gen uint64, cursorIdx int) {
 	if pc.name != name {
 		pc.content = ""
 	}
 	pc.name = name
+	pc.gen = gen
 	pc.cursor = cursorIdx
 	pc.busy = false
 	pc.fetchAt = time.Now()

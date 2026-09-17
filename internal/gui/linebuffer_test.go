@@ -220,3 +220,19 @@ func TestLineBufferShrinkReplacesOldScreen(t *testing.T) {
 	b2.Feed(screen("s4", "s5"))
 	assert.Equal(t, []string{"s1", "s4", "s5"}, b2.Snapshot())
 }
+
+func TestLineBufferRepeatedLineScrollAccumulates(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b", "c"))
+	// Genuine scroll with a repeated line: the shift is valid and must
+	// accumulate history even though the new line is not novel.
+	b.Feed(screen("b", "c", "c"))
+	assert.Equal(t, []string{"a", "b", "c", "c"}, b.Snapshot())
+}
+
+func TestLineBufferCappedSeedThenShrinkReseeds(t *testing.T) {
+	b := NewLineBuffer(3)
+	b.Feed(screen("a", "b", "c", "d", "e")) // capped to 3, screen height 5
+	b.Feed(screen("x", "y"))
+	assert.Equal(t, []string{"x", "y"}, b.Snapshot(), "an unmatched shrink after a capped seed must reseed, not slice")
+}

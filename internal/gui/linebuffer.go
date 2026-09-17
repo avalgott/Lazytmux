@@ -83,16 +83,21 @@ func (b *LineBuffer) update(scr []string) []string {
 		tail = tail[len(tail)-n:]
 	}
 	// Scroll-up: suffix of tail matches prefix of scr.
-	if d, ok := shiftUp(tail, scr); ok {
+	if d, ok := shiftUp(tail, scr); ok && d > 0 {
 		added := scr[n-d:]
-		if majorityFresh(added, b.lines) {
+		// Accept when most added lines are novel, or when the added block is
+		// small and does not replay the dropped block (rotations replay the
+		// dropped lines; repeated log/status output replays only some).
+		if majorityFresh(added, b.lines) ||
+			(len(added) <= max(2, n/5) && !majorityEqual(added, tail[:d])) {
 			return capLines(append(b.lines, added...), b.cap)
 		}
 	}
 	// Scroll-down: prefix of tail matches suffix of scr.
-	if d, ok := shiftDown(tail, scr); ok {
+	if d, ok := shiftDown(tail, scr); ok && d > 0 {
 		added := scr[:d]
-		if majorityFresh(added, b.lines) {
+		if majorityFresh(added, b.lines) ||
+			(len(added) <= max(2, n/5) && !majorityEqual(added, tail[n-d:])) {
 			return capLines(append(append([]string(nil), added...), b.lines...), b.cap)
 		}
 	}
@@ -102,10 +107,9 @@ func (b *LineBuffer) update(scr []string) []string {
 	if len(b.lines) >= prev {
 		return capLines(append(append([]string(nil), b.lines[:len(b.lines)-prev]...), scr...), b.cap)
 	}
-	if m := len(b.lines); m > 0 && slices.Equal(b.lines, scr[:m]) {
-		return capLines(append(b.lines, scr[m:]...), b.cap)
-	}
-	return capLines(append(b.lines, scr...), b.cap)
+	// The buffer holds less than the previous screen (a capped seed): only a
+	// truncated tail is retained — reseed from the current screen.
+	return capLines(scr, b.cap)
 }
 
 // shiftUp returns the scroll-up shift d (0 = identical) where
@@ -143,6 +147,21 @@ func shiftDown(tail, scr []string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// majorityEqual reports whether more than half of the candidate lines equal
+// their counterparts in other — a rotation replays the lines it dropped.
+func majorityEqual(a, b []string) bool {
+	if len(a) == 0 || len(b) < len(a) {
+		return false
+	}
+	eq := 0
+	for i := range a {
+		if a[i] == b[i] {
+			eq++
+		}
+	}
+	return eq*2 > len(a)
 }
 
 // majorityFresh reports whether more than half of the candidate lines have

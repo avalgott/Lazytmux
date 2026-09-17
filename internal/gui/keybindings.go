@@ -110,11 +110,34 @@ func (a *App) setupKeybindings() error {
 
 	// Mouse wheel: scrolls the preview panel on the dashboard and enters
 	// scroll mode in fullscreen (or forwards to a mouse-tracking pane).
+	// View-scoped bindings fire first when the mouse is over the main view
+	// and carry the actual mouse position for the pane forward; the global
+	// ones remain the fallback where the location is irrelevant.
 	if err := a.g.SetKeybinding("", gocui.MouseWheelUp, gocui.ModNone, a.wheelHandler(-3)); err != nil {
 		return err
 	}
 	if err := a.g.SetKeybinding("", gocui.MouseWheelDown, gocui.ModNone, a.wheelHandler(3)); err != nil {
 		return err
+	}
+	for _, b := range []struct {
+		key   gocui.Key
+		delta int
+	}{
+		{gocui.MouseWheelUp, -3},
+		{gocui.MouseWheelDown, 3},
+	} {
+		delta := b.delta
+		if err := a.g.SetViewClickBinding(&gocui.ViewMouseBinding{
+			ViewName: "main",
+			Key:      b.key,
+			Modifier: gocui.ModNone,
+			Handler: func(opts gocui.ViewMouseBindingOpts) error {
+				a.wheelHandlerAt(delta, opts.X, opts.Y)
+				return nil
+			},
+		}); err != nil {
+			return err
+		}
 	}
 
 	// g/G browse the snapshot in the dashboard preview panel. In fullscreen
@@ -356,58 +379,72 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 // history. On the dashboard the wheel scrolls the preview panel.
 func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 	return func(g *gocui.Gui, v *gocui.View) error {
-		if a.fullscreen.IsActive() {
-			if a.scroll.IsActive() {
-				a.scroll.Move(delta)
-				a.g.Update(func(*gocui.Gui) error { return nil })
-				return nil
-			}
-			target := a.fullscreen.Target()
-			alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
-			if err == nil && alt && mouse {
-				if ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy); ferr == nil {
-					return nil
-				} else {
-					// A failed forward (dead pane, tmux error) must not be a
-					// silent no-op: fall back to lazytmux scroll mode.
-					a.setError(fmt.Sprintf("forward wheel: %v", ferr))
-				}
-			}
-			// Wheel-down at the live bottom has nothing to browse; entering
-			// would start a whole-history load that pins at the bottom.
-			if delta > 0 {
-				return nil
-			}
-			a.enterScrollMode()
-			a.scroll.Move(delta)
-			a.g.Update(func(*gocui.Gui) error { return nil })
-			return nil
-		}
-		// Dashboard: the wheel scrolls the preview panel.
-		if a.dialog != DialogNone {
-			return nil
-		}
-		// Wheel-down at the live bottom has nothing to browse; entering would
-		// start a full history load that immediately exits again.
-		if !a.previewScroll.IsActive() && delta > 0 {
-			return nil
-		}
-		if !a.previewScroll.IsActive() {
-			a.enterPreviewScroll()
-		}
-		if !a.previewScroll.IsActive() {
-			return nil
-		}
-		a.previewScroll.Move(delta)
-		// A downward gesture reaching the live bottom returns to the live
-		// capture — loaded or not, so the result is independent of load timing.
-		if a.previewScroll.offsetFromBottom == 0 && delta > 0 {
-			a.exitPreviewScroll()
-			return nil
-		}
-		a.g.Update(func(*gocui.Gui) error { return nil })
+		a.wheel(delta, 0, 0, false)
 		return nil
 	}
+}
+
+// wheelHandlerAt handles a view-scoped wheel event: the coordinates are the
+// actual mouse position (content-relative), which SGR consumers use to pick
+// the hovered widget — pane cursor coordinates would target the wrong one.
+func (a *App) wheelHandlerAt(delta, x, y int) {
+	a.wheel(delta, x, y, true)
+}
+
+func (a *App) wheel(delta, x, y int, hasPos bool) {
+	if a.fullscreen.IsActive() {
+		if a.scroll.IsActive() {
+			a.scroll.Move(delta)
+			a.g.Update(func(*gocui.Gui) error { return nil })
+			return
+		}
+		target := a.fullscreen.Target()
+		alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
+		if err == nil && alt && mouse {
+			if hasPos {
+				cx, cy = x, y
+			}
+			if ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy); ferr == nil {
+				return
+			} else {
+				// A failed forward (dead pane, tmux error) must not be a
+				// silent no-op: fall back to lazytmux scroll mode.
+				a.setError(fmt.Sprintf("forward wheel: %v", ferr))
+			}
+		}
+		// Wheel-down at the live bottom has nothing to browse; entering
+		// would start a whole-history load that pins at the bottom.
+		if delta > 0 {
+			return
+		}
+		a.enterScrollMode()
+		a.scroll.Move(delta)
+		a.g.Update(func(*gocui.Gui) error { return nil })
+		return
+	}
+	// Dashboard: the wheel scrolls the preview panel.
+	if a.dialog != DialogNone {
+		return
+	}
+	// Wheel-down at the live bottom has nothing to browse; entering would
+	// start a full history load that immediately exits again.
+	if !a.previewScroll.IsActive() && delta > 0 {
+		return
+	}
+	if !a.previewScroll.IsActive() {
+		a.enterPreviewScroll()
+	}
+	if !a.previewScroll.IsActive() {
+		return
+	}
+	a.previewScroll.Move(delta)
+	// A downward gesture reaching the live bottom returns to the live
+	// capture — loaded or not, so the result is independent of load timing.
+	if a.previewScroll.offsetFromBottom == 0 && delta > 0 {
+		a.exitPreviewScroll()
+		return
+	}
+	a.g.Update(func(*gocui.Gui) error { return nil })
 }
 
 // cancelDialog closes whichever dialog is active. Bound to Esc on all dialog
