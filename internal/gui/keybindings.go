@@ -132,7 +132,9 @@ func (a *App) setupKeybindings() error {
 			Key:      b.key,
 			Modifier: gocui.ModNone,
 			Handler: func(opts gocui.ViewMouseBindingOpts) error {
-				x, y := a.clampWheelCoords(opts.X, opts.Y)
+				// The editable view clamps X to the rendered line width;
+				// the raw viewport position is the pane coordinate.
+				x, y := a.clampWheelCoords(opts.ViewportX, opts.ViewportY)
 				a.wheelHandlerAt(delta, x, y)
 				return nil
 			},
@@ -473,6 +475,13 @@ func (a *App) decideFullscreenWheel(target string, delta, x, y int, hasPos bool)
 		return wheelIgnored, nil
 	}
 	return wheelFallback, nil
+}
+
+// wheelFallbackCurrent reports whether the fullscreen state that initiated a
+// wheel decision is still the live one — a slow query must not apply its
+// fallback to a session the user has since left.
+func (a *App) wheelFallbackCurrent(fsGen int, target string) bool {
+	return a.fullscreenGen == fsGen && a.fullscreen.IsActive() && a.fullscreen.Target() == target
 }
 
 // performWheelAction applies a wheel decision on the event loop.

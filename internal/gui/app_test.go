@@ -1484,6 +1484,7 @@ func TestPreviewTitleShowsScrollHint(t *testing.T) {
 	app.cursor = 0
 	app.scrollHintName = "devbox"
 	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
+	app.scrollHintIdent = "@0" // ID and Created both default to empty/0
 	app.scrollHintUntil = time.Now().Add(time.Minute)
 
 	require.NoError(t, app.layout(app.g))
@@ -1498,6 +1499,7 @@ func TestPreviewTitleHintExpires(t *testing.T) {
 	app.cursor = 0
 	app.scrollHintName = "devbox"
 	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
+	app.scrollHintIdent = "devbox@0"
 	app.scrollHintUntil = time.Now().Add(-time.Second)
 
 	require.NoError(t, app.layout(app.g))
@@ -1512,6 +1514,7 @@ func TestPreviewTitleHintWrongSession(t *testing.T) {
 	app.cursor = 0
 	app.scrollHintName = "other"
 	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
+	app.scrollHintIdent = "other@0"
 	app.scrollHintUntil = time.Now().Add(time.Minute)
 
 	require.NoError(t, app.layout(app.g))
@@ -1860,7 +1863,7 @@ func TestScrollHintBoundToSessionID(t *testing.T) {
 	app.cursor = 0
 	app.scrollHintName = "devbox"
 	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
-	app.scrollHintID = "$1" // the hint belongs to the previous incarnation
+	app.scrollHintIdent = "$1@100" // the hint belongs to the previous incarnation
 	app.scrollHintUntil = time.Now().Add(time.Minute)
 
 	require.NoError(t, app.layout(app.g))
@@ -2059,7 +2062,7 @@ func TestApplyNoHistoryHintPlain(t *testing.T) {
 	app.applyNoHistoryHint("devbox", false, false, false)
 	assert.False(t, app.previewScroll.IsActive())
 	assert.Equal(t, "devbox", app.scrollHintName)
-	assert.Equal(t, "$1", app.scrollHintID)
+	assert.Equal(t, "$1@0", app.scrollHintIdent)
 	require.NotEmpty(t, app.logs)
 	assert.NotContains(t, app.logs[len(app.logs)-1].msg, "Hit Enter")
 }
@@ -2073,4 +2076,32 @@ func TestApplyNoHistoryHintWithForwarding(t *testing.T) {
 	app.applyNoHistoryHint("devbox", true, true, false)
 	require.NotEmpty(t, app.logs)
 	assert.Contains(t, app.logs[len(app.logs)-1].msg, "Hit Enter")
+}
+
+// --- Copilot round-12 fixes ---
+
+func TestWheelFallbackDiscardedAfterLeavingFullscreen(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	fsGen := app.fullscreenGen
+	assert.True(t, app.wheelFallbackCurrent(fsGen, "devbox"))
+
+	app.exitFullScreen()
+	assert.False(t, app.wheelFallbackCurrent(fsGen, "devbox"), "a fallback from the previous fullscreen session must be discarded")
+}
+
+func TestScrollHintNotInheritedByRecycledID(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$0", Created: 200}}
+	app.cursor = 0
+	app.scrollHintName = "devbox"
+	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
+	app.scrollHintIdent = "$0@100" // same ID, previous server incarnation
+	app.scrollHintUntil = time.Now().Add(time.Minute)
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.NotContains(t, v.Title, "Hit Enter", "a recycled ID with a new creation time must not inherit the hint")
 }

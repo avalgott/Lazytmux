@@ -77,6 +77,7 @@ type App struct {
 	// tmux scrollback history (alternate-screen programs like Claude Code),
 	// so the status bar can say so and the wheel forwards to the pane.
 	fullscreenNoScrollback bool
+	fullscreenGen          int // bumped on enter/exit; stale async callbacks compare against it
 	lastResizeW            int // and the size it was resized to
 	lastResizeH            int
 	logs                   []logEntry  // recent status/error messages, shown in the logs panel
@@ -93,7 +94,7 @@ type App struct {
 	// attempt on a session that keeps its own scrollback (alternate-screen
 	// programs like Claude Code): "press Enter to open it and scroll inside".
 	scrollHintName  string
-	scrollHintID    string // tmux ID the hint belongs to (same-name recreations must not inherit it)
+	scrollHintIdent string // session identity (ID@Created) the hint belongs to
 	scrollHintMsg   string // the message shown (depends on whether scrolling inside is possible)
 	scrollHintUntil time.Time
 }
@@ -371,8 +372,9 @@ func (a *App) enterFullScreen() {
 	a.previewScrollTarget = ""
 	a.previewScrollTargetID = ""
 	a.fullscreenNoScrollback = false
+	a.fullscreenGen++
 	a.scrollHintName = ""
-	a.scrollHintID = ""
+	a.scrollHintIdent = ""
 	a.scrollHintMsg = ""
 	a.scrollHintUntil = time.Time{}
 	a.preview.Invalidate()
@@ -384,6 +386,7 @@ func (a *App) exitFullScreen() {
 	a.scroll.Exit()
 	a.fullscreen.Exit()
 	a.fullscreenNoScrollback = false
+	a.fullscreenGen++
 	a.preview.Invalidate()
 }
 

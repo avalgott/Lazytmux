@@ -99,6 +99,12 @@ type ViewMouseBindingOpts struct {
 	X int // i.e. origin x + cursor x
 	Y int // i.e. origin y + cursor y
 
+	// ViewportX/Y are the raw viewport-relative coordinates, before the
+	// editable-text clamp below — editable views clamp X to the rendered
+	// line width, which loses the true position past the last character.
+	ViewportX int
+	ViewportY int
+
 	Key Key // which button was clicked (will be one of the Mouse* constants)
 
 	IsDoubleClick bool // true if this is a double click
@@ -1547,6 +1553,7 @@ func (g *Gui) onKey(ev *GocuiEvent) error {
 		// newX and newY are relative to the view's content, independent of its scroll position
 		newX := newCx + v.ox
 		newY := newCy + v.oy
+		rawCx, rawCy := newCx, newCy
 		// if view is editable don't go further than the furthest character for that line
 		if v.Editable {
 			if newY < 0 {
@@ -1612,7 +1619,7 @@ func (g *Gui) onKey(ev *GocuiEvent) error {
 
 		if IsMouseKey(ev.Key) {
 			isDoubleClick := g.recordClickInfo(newX, newY, ev.Key, v)
-			opts := ViewMouseBindingOpts{X: newX, Y: newY, Key: ev.Key, IsDoubleClick: isDoubleClick}
+			opts := ViewMouseBindingOpts{X: newX, Y: newY, ViewportX: rawCx, ViewportY: rawCy, Key: ev.Key, IsDoubleClick: isDoubleClick}
 			matched, err := g.execMouseKeybindings(v, ev, opts)
 			if err != nil {
 				return err

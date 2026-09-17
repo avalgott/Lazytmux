@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jesseduffield/gocui"
@@ -48,7 +49,8 @@ func (a *App) renderPreview(v *gocui.View) {
 	// A recent scroll attempt on a session without scrollback explains
 	// itself in the title for a few seconds (the log keeps a record too).
 	// Dashboard only — the fullscreen frame title carries the session name.
-	if !a.fullscreen.IsActive() && a.scrollHintName == sess.Name && a.scrollHintID == sess.ID && time.Now().Before(a.scrollHintUntil) {
+	ident := sess.ID + "@" + strconv.FormatInt(sess.Created, 10)
+	if !a.fullscreen.IsActive() && a.scrollHintName == sess.Name && a.scrollHintIdent == ident && time.Now().Before(a.scrollHintUntil) {
 		v.Title = " " + a.scrollHintMsg + " "
 	}
 
