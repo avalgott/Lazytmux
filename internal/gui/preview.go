@@ -98,7 +98,10 @@ func (pc *PreviewCache) InvalidateTimestamp() {
 // one session's screen under another's name.
 // Caller must hold lock.
 func (pc *PreviewCache) MarkFetched(name string, gen uint64, cursorIdx int) {
-	if pc.name != name {
+	// A different name OR generation is a different session incarnation:
+	// retagging its cached screen would display one pane's content under
+	// another's. Same-incarnation refresh failures keep the cache.
+	if pc.name != name || pc.gen != gen {
 		pc.content = ""
 	}
 	pc.name = name

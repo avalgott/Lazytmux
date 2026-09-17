@@ -19,8 +19,9 @@ import (
 )
 
 // Info is a read-only view of a tmux session for display. ID is tmux's
-// session ID and Created its creation time — names and even IDs (after a
-// server restart) can be reused, the pair cannot.
+// session ID, Created its creation time, and ServerPID the tmux server
+// incarnation — names, IDs, and even creation seconds can be reused after
+// a restart, so the full triple is the stable identity.
 type Info struct {
 	Name      string
 	ID        string

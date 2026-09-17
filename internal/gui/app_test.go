@@ -2443,3 +2443,16 @@ func TestStaleGenPreviewLoadRestarts(t *testing.T) {
 		return len(p.scrollRanges) > n0
 	}, time.Second, 10*time.Millisecond, "a replacement load must be requested under the current generation")
 }
+
+// --- Copilot round-23 fixes ---
+
+func TestMarkFetchedClearsForeignGeneration(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.preview.Lock()
+	app.preview.Update("devbox", "OLD-SCREEN", 1, 0, 0, 0)
+	// A failed capture for the recreated incarnation must not retag the
+	// previous pane's content.
+	app.preview.MarkFetched("devbox", 2, 0)
+	assert.Equal(t, "", app.preview.Content(), "a generation change is a different session incarnation")
+	app.preview.Unlock()
+}
