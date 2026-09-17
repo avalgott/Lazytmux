@@ -19,10 +19,12 @@ import (
 )
 
 // Info is a read-only view of a tmux session for display. ID is tmux's
-// stable session ID — names can be reused after a kill, the ID cannot.
+// session ID and Created its creation time — names and even IDs (after a
+// server restart) can be reused, the pair cannot.
 type Info struct {
 	Name     string
 	ID       string
+	Created  int64
 	Path     string
 	Attached bool
 	Windows  int
@@ -116,6 +118,7 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 		infos[i] = Info{
 			Name:     sess.Name,
 			ID:       sess.ID,
+			Created:  sess.Created,
 			Path:     sess.Path,
 			Attached: sess.Attached,
 			Windows:  sess.Windows,

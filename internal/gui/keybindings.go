@@ -132,7 +132,8 @@ func (a *App) setupKeybindings() error {
 			Key:      b.key,
 			Modifier: gocui.ModNone,
 			Handler: func(opts gocui.ViewMouseBindingOpts) error {
-				a.wheelHandlerAt(delta, opts.X, opts.Y)
+				x, y := a.clampWheelCoords(opts.X, opts.Y)
+				a.wheelHandlerAt(delta, x, y)
 				return nil
 			},
 		}); err != nil {
@@ -391,6 +392,15 @@ func (a *App) wheelHandlerAt(delta, x, y int) {
 	a.wheel(delta, x, y, true)
 }
 
+// wheelDecision is what decideFullscreenWheel concluded.
+type wheelDecision int
+
+const (
+	wheelForwarded wheelDecision = iota // the pane's program received the wheel
+	wheelIgnored                        // nothing to do (wheel-down at the live bottom)
+	wheelFallback                       // enter lazytmux scroll mode instead
+)
+
 func (a *App) wheel(delta, x, y int, hasPos bool) {
 	if a.fullscreen.IsActive() {
 		if a.scroll.IsActive() {
@@ -398,28 +408,21 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 			a.g.Update(func(*gocui.Gui) error { return nil })
 			return
 		}
+		// The tmux round-trips run off the event loop: each can block for
+		// the client timeout, and queuing wheel input must not freeze the
+		// UI. The target is captured up front — the fullscreen state is
+		// event-loop owned.
 		target := a.fullscreen.Target()
-		alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
-		if err == nil && alt && mouse {
-			if hasPos {
-				cx, cy = x, y
-			}
-			if ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy); ferr == nil {
+		go func() {
+			d, actErr := a.decideFullscreenWheel(target, delta, x, y, hasPos)
+			if d == wheelForwarded || d == wheelIgnored {
 				return
-			} else {
-				// A failed forward (dead pane, tmux error) must not be a
-				// silent no-op: fall back to lazytmux scroll mode.
-				a.setError(fmt.Sprintf("forward wheel: %v", ferr))
 			}
-		}
-		// Wheel-down at the live bottom has nothing to browse; entering
-		// would start a whole-history load that pins at the bottom.
-		if delta > 0 {
-			return
-		}
-		a.enterScrollMode()
-		a.scroll.Move(delta)
-		a.g.Update(func(*gocui.Gui) error { return nil })
+			a.g.Update(func(*gocui.Gui) error {
+				a.performWheelAction(d, delta, actErr)
+				return nil
+			})
+		}()
 		return
 	}
 	// Dashboard: the wheel scrolls the preview panel.
@@ -445,6 +448,60 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 		return
 	}
 	a.g.Update(func(*gocui.Gui) error { return nil })
+}
+
+// decideFullscreenWheel runs the tmux queries for a live fullscreen wheel
+// event and returns the decision without touching UI state — safe to run
+// from a goroutine.
+func (a *App) decideFullscreenWheel(target string, delta, x, y int, hasPos bool) (wheelDecision, error) {
+	alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
+	if err == nil && alt && mouse {
+		if hasPos {
+			cx, cy = x, y
+		}
+		ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy)
+		if ferr == nil {
+			return wheelForwarded, nil
+		}
+		// A failed forward (dead pane, tmux error) must not be a silent
+		// no-op: fall back to lazytmux scroll mode.
+		return wheelFallback, fmt.Errorf("forward wheel: %v", ferr)
+	}
+	// Wheel-down at the live bottom has nothing to browse; entering would
+	// start a whole-history load that pins at the bottom.
+	if delta > 0 {
+		return wheelIgnored, nil
+	}
+	return wheelFallback, nil
+}
+
+// performWheelAction applies a wheel decision on the event loop.
+func (a *App) performWheelAction(d wheelDecision, delta int, actErr error) {
+	if actErr != nil {
+		a.setError(actErr.Error())
+	}
+	if d == wheelFallback {
+		a.enterScrollMode()
+		a.scroll.Move(delta)
+	}
+	a.g.Update(func(*gocui.Gui) error { return nil })
+}
+
+// clampWheelCoords bounds view mouse coordinates to the content area —
+// gocui reports -1 on the top/left frame borders and the inner size on the
+// right/bottom ones, which SGR consumers would discard as out of range.
+func (a *App) clampWheelCoords(x, y int) (int, int) {
+	v, err := a.g.View("main")
+	if err != nil {
+		return x, y
+	}
+	if w := v.InnerWidth(); w > 0 {
+		x = clampInt(x, 0, w-1)
+	}
+	if h := v.InnerHeight(); h > 0 {
+		y = clampInt(y, 0, h-1)
+	}
+	return x, y
 }
 
 // cancelDialog closes whichever dialog is active. Bound to Esc on all dialog

@@ -7,6 +7,7 @@ package gui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -508,16 +509,19 @@ func (a *App) bufferLookup(name string) *LineBuffer {
 }
 
 // sessionListSig is a cheap identity signature of the session list: the
-// name=ID pairs joined in list order (the service sorts by name, so the
-// order is stable). It changes exactly when a session appears, disappears,
-// is renamed, or is recreated — the events that invalidate in-flight
-// captures.
+// name=ID=Created triples joined in list order (the service sorts by name,
+// so the order is stable). It changes exactly when a session appears,
+// disappears, is renamed, or is recreated — the events that invalidate
+// in-flight captures. Created is included because tmux recycles session IDs
+// after a server restart.
 func sessionListSig(sessions []session.Info) string {
 	var sb strings.Builder
 	for _, s := range sessions {
 		sb.WriteString(s.Name)
 		sb.WriteByte('=')
 		sb.WriteString(s.ID)
+		sb.WriteByte('=')
+		sb.WriteString(strconv.FormatInt(s.Created, 10))
 		sb.WriteByte(';')
 	}
 	return sb.String()
