@@ -1780,6 +1780,7 @@ func TestStaleGenerationDoesNotInstallResult(t *testing.T) {
 
 func TestBufferResetWhenSessionIdentityChanges(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1"}}, nil)
 	app.feedBuffer("devbox", "old-session-output")
 
 	// The buffer survives a refresh that sees the same identity.
@@ -1850,4 +1851,26 @@ func TestPreviewScrollExitsWhenSessionIDChanges(t *testing.T) {
 	assert.False(t, app.previewScroll.IsActive(), "a recreated session must not keep browsing the dead snapshot")
 	assert.Equal(t, "", app.previewScrollTarget)
 	assert.Equal(t, "", app.previewScrollTargetID)
+}
+
+// --- Copilot round-8 fix: unbound buffers must not adopt a new identity ---
+
+func TestUnboundBufferDroppedOnRecreation(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1"}}, nil)
+	// A feed lands between polls, before any ID binding exists.
+	app.feedBuffer("devbox", "stale-output")
+
+	// The session died and was recreated before the next poll.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2"}}, nil)
+	assert.Nil(t, app.bufferLookup("devbox"), "an unbound buffer from the previous incarnation must not adopt the new identity")
+}
+
+func TestUnboundBufferBoundWhenIdentityUnchanged(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1"}}, nil)
+	app.feedBuffer("devbox", "live-output")
+
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1"}}, nil)
+	assert.NotNil(t, app.bufferLookup("devbox"), "an unbound buffer binds when the session identity did not change")
 }

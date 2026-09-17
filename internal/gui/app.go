@@ -83,6 +83,7 @@ type App struct {
 	attachTarget           string      // session to attach to; set on Enter, main() acts on it
 	buffers                map[string]*LineBuffer
 	bufferIDs              map[string]string // buffer name -> tmux session ID it belongs to
+	bufferGens             map[string]uint64 // generation the buffer was last fed under
 	buffersMu              sync.Mutex        // guards the buffers map (LineBuffer locks itself)
 	sessionGen             atomic.Uint64
 	lastSessionSig         string // name=ID signature of the last applied refresh
@@ -142,6 +143,7 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 		previewScroll: &ScrollState{},
 		buffers:       make(map[string]*LineBuffer),
 		bufferIDs:     make(map[string]string),
+		bufferGens:    make(map[string]uint64),
 	}
 
 	g.Highlight = true
@@ -289,7 +291,13 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 		for _, s := range a.sessions {
 			if s.Name == name {
 				found = true
-				if a.bufferIDs[name] != "" && a.bufferIDs[name] != s.ID {
+				// A bound buffer belongs to a dead incarnation when its ID
+				// changed. An UNBOUND buffer (fed between polls) may only
+				// adopt the current identity if it was fed under the current
+				// generation — otherwise it holds the previous
+				// incarnation's output and is dropped.
+				if (a.bufferIDs[name] != "" && a.bufferIDs[name] != s.ID) ||
+					(a.bufferIDs[name] == "" && a.bufferGens[name] != a.sessionGen.Load()) {
 					delete(a.buffers, name)
 				}
 				a.bufferIDs[name] = s.ID
@@ -299,6 +307,7 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 		if !found {
 			delete(a.buffers, name)
 			delete(a.bufferIDs, name)
+			delete(a.bufferGens, name)
 		}
 	}
 	a.buffersMu.Unlock()
@@ -437,6 +446,7 @@ func (a *App) feedBuffer(name, content string) {
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
 	a.feedBufferLocked(name, content)
+	a.bufferGens[name] = a.sessionGen.Load()
 }
 
 // feedBufferIfCurrent feeds the session's synthetic buffer only if the
@@ -454,6 +464,7 @@ func (a *App) feedBufferIfCurrent(name string, gen uint64, content string) {
 		return
 	}
 	a.feedBufferLocked(name, content)
+	a.bufferGens[name] = gen
 }
 
 // feedBufferLocked feeds the buffer without taking the map lock — the caller
