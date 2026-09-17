@@ -247,3 +247,15 @@ func TestLineBufferRepeatedMultiRowScrollAccumulates(t *testing.T) {
 	want := append(append([]string(nil), base...), "L", "L", "L")
 	assert.Equal(t, want, b.Snapshot())
 }
+
+func TestLineBufferReverseScrollDoesNotDuplicate(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"))
+	b.Feed(screen("L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"))
+	// Reverse scroll back up: the re-revealed L04 is already known — it must
+	// not be prepended a second time.
+	b.Feed(screen("L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"))
+	snap := b.Snapshot()
+	assert.Equal(t, []string{"L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"}, snap,
+		"reverse scrolling must not duplicate the re-revealed lines")
+}

@@ -80,6 +80,7 @@ type App struct {
 	fullscreenGen          atomic.Uint64  // bumped on enter/exit; async callbacks compare against it
 	wheelGen               atomic.Uint64  // bumped on scroll-mode transitions; stale forwards compare against it
 	wheelExitGen           atomic.Uint64  // bumped on scroll-mode exit; stale fallbacks compare against it
+	userScrollGen          atomic.Uint64  // bumped when the USER enters scroll mode; queued wheel events compare against it
 	wheelQueue             chan wheelTask // ordered queue of wheel events (worker-owned)
 	fsMu                   sync.Mutex     // serializes wheel injection with fullscreen transitions
 	lastResizeW            int            // and the size it was resized to

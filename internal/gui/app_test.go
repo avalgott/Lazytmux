@@ -2093,10 +2093,10 @@ func TestWheelFallbackDiscardedAfterLeavingFullscreen(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
 	fsGen := app.fullscreenGen.Load()
-	assert.True(t, app.wheelFallbackCurrent(fsGen, app.wheelExitGen.Load(), app.sessionGen.Load(), "devbox"))
+	assert.True(t, app.wheelFallbackCurrent(fsGen, app.wheelExitGen.Load(), app.sessionGen.Load(), app.userScrollGen.Load(), "devbox"))
 
 	app.exitFullScreen()
-	assert.False(t, app.wheelFallbackCurrent(fsGen, app.wheelExitGen.Load(), app.sessionGen.Load(), "devbox"), "a fallback from the previous fullscreen session must be discarded")
+	assert.False(t, app.wheelFallbackCurrent(fsGen, app.wheelExitGen.Load(), app.sessionGen.Load(), app.userScrollGen.Load(), "devbox"), "a fallback from the previous fullscreen session must be discarded")
 }
 
 func TestScrollHintNotInheritedByRecycledID(t *testing.T) {
@@ -2231,7 +2231,7 @@ func TestWheelFallbackRejectedAfterScrollModeToggle(t *testing.T) {
 	// flight — the pending fallback must not re-enter it.
 	app.enterScrollMode()
 	app.exitScrollMode()
-	assert.False(t, app.wheelFallbackCurrent(fsGen, exitGen, app.sessionGen.Load(), "devbox"),
+	assert.False(t, app.wheelFallbackCurrent(fsGen, exitGen, app.sessionGen.Load(), app.userScrollGen.Load(), "devbox"),
 		"a fallback from before the scroll-mode toggle must be discarded")
 }
 
@@ -2506,4 +2506,29 @@ func TestQueuedWheelDownAppliesAfterUpEnteredScroll(t *testing.T) {
 	assert.Equal(t, wheelIgnored, dd)
 	app.applyWheelIgnoredIfScrolling(down)
 	assert.Equal(t, 0, app.scroll.offsetFromBottom, "the queued wheel-down scrolls the snapshot instead of vanishing")
+}
+
+// --- Copilot round-26 fixes ---
+
+func TestStaleIgnoredWheelDoesNotAlterUserEnteredScroll(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	down := wheelTask{
+		target:  "devbox",
+		fsGen:   app.fullscreenGen.Load(),
+		wGen:    app.wheelGen.Load(),
+		exitGen: app.wheelExitGen.Load(),
+		sGen:    app.sessionGen.Load(),
+		uGen:    app.userScrollGen.Load(),
+		delta:   3,
+	}
+	// The user enters scroll mode themselves while the queued event is stale.
+	require.NoError(t, app.toggleScrollHandler(app.g, nil))
+	assert.True(t, app.scroll.IsActive())
+
+	app.applyWheelIgnoredIfScrolling(down)
+	assert.Equal(t, 0, app.scroll.offsetFromBottom, "a stale queued event must not move the user's own scroll view")
 }

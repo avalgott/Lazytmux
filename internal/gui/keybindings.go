@@ -325,6 +325,9 @@ func (a *App) toggleScrollHandler(g *gocui.Gui, v *gocui.View) error {
 	if a.scroll.IsActive() {
 		a.exitScrollMode()
 	} else {
+		// The USER entered scroll mode: queued wheel events from before must
+		// not alter this view.
+		a.userScrollGen.Add(1)
 		a.enterScrollMode()
 	}
 	return nil
@@ -426,6 +429,7 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 			wGen:    a.wheelGen.Load(),
 			exitGen: a.wheelExitGen.Load(),
 			sGen:    a.sessionGen.Load(),
+			uGen:    a.userScrollGen.Load(),
 			delta:   delta, x: x, y: y, hasPos: hasPos,
 		})
 		return
@@ -497,6 +501,7 @@ type wheelTask struct {
 	wGen    uint64
 	exitGen uint64
 	sGen    uint64 // session generation: a recreated same-name pane must not receive the event
+	uGen    uint64 // user scroll-entry generation: the user's own Ctrl+V invalidates queued events
 	delta   int
 	x, y    int
 	hasPos  bool
@@ -558,7 +563,7 @@ func (a *App) processWheelTask(t wheelTask) {
 // the wheel-down that followed a queued wheel-up scrolls the frozen
 // snapshot instead of vanishing.
 func (a *App) applyWheelIgnoredIfScrolling(t wheelTask) {
-	if a.wheelFallbackCurrent(t.fsGen, t.exitGen, t.sGen, t.target) && a.scroll.IsActive() {
+	if a.wheelFallbackCurrent(t.fsGen, t.exitGen, t.sGen, t.uGen, t.target) && a.scroll.IsActive() {
 		a.scroll.Move(t.delta)
 		a.g.Update(func(*gocui.Gui) error { return nil })
 	}
@@ -568,7 +573,7 @@ func (a *App) applyWheelIgnoredIfScrolling(t wheelTask) {
 // when the initiating state is still current. Split out so tests can drive
 // it directly (headless mode never runs gui.Update).
 func (a *App) applyWheelFallbackIfCurrent(t wheelTask, d wheelDecision, actErr error) {
-	if a.wheelFallbackCurrent(t.fsGen, t.exitGen, t.sGen, t.target) {
+	if a.wheelFallbackCurrent(t.fsGen, t.exitGen, t.sGen, t.uGen, t.target) {
 		a.performWheelAction(d, t.delta, actErr)
 	}
 }
@@ -578,9 +583,9 @@ func (a *App) applyWheelFallbackIfCurrent(t wheelTask, d wheelDecision, actErr e
 // to a session the user has since left, or after the user has exited scroll
 // mode while the query was in flight. Entering scroll mode does NOT
 // invalidate queued fallbacks: their deltas still accumulate in order.
-func (a *App) wheelFallbackCurrent(fsGen, exitGen, sGen uint64, target string) bool {
+func (a *App) wheelFallbackCurrent(fsGen, exitGen, sGen, uGen uint64, target string) bool {
 	return a.fullscreenGen.Load() == fsGen && a.wheelExitGen.Load() == exitGen &&
-		a.sessionGen.Load() == sGen &&
+		a.sessionGen.Load() == sGen && a.userScrollGen.Load() == uGen &&
 		a.fullscreen.IsActive() && a.fullscreen.Target() == target
 }
 

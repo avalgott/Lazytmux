@@ -96,20 +96,28 @@ func (b *LineBuffer) update(scr []string) []string {
 			return capLines(append(b.lines, added...), b.cap)
 		}
 	}
-	// Scroll-down: prefix of tail matches suffix of scr.
+	// Scroll-down: prefix of tail matches suffix of scr. Reverse scrolling
+	// re-reveals lines the buffer already holds — only genuinely new older
+	// content may be prepended, or every reverse frame would duplicate the
+	// re-revealed lines.
 	if d, ok := shiftDown(tail, scr); ok && d > 0 {
 		added := scr[:d]
-		if majorityFresh(added, b.lines) ||
-			(!majorityEqual(added, tail[n-d:]) &&
-				(len(added) <= max(2, n/5) || !majorityEqual(added, tail[:d]))) {
+		if majorityFresh(added, b.lines) {
 			return capLines(append(append([]string(nil), added...), b.lines...), b.cap)
 		}
 	}
 	// In-place edit, full redraw, or a resized pane: replace the PREVIOUS
 	// screen region (its height, not the new one — a shrunk pane must not
-	// leave the old screen's tail behind as fake history).
+	// leave the old screen's tail behind as fake history). The new screen
+	// may overlap the retained history prefix (a reverse scroll re-reveals
+	// its top lines): drop the duplicated head of scr.
 	if len(b.lines) >= prev {
-		return capLines(append(append([]string(nil), b.lines[:len(b.lines)-prev]...), scr...), b.cap)
+		prefix := b.lines[:len(b.lines)-prev]
+		ov := 0
+		for ov < len(scr) && ov < len(prefix) && scr[ov] == prefix[len(prefix)-1-ov] {
+			ov++
+		}
+		return capLines(append(append([]string(nil), prefix...), scr[ov:]...), b.cap)
 	}
 	// The buffer holds less than the previous screen (a capped seed): only a
 	// truncated tail is retained — reseed from the current screen.
