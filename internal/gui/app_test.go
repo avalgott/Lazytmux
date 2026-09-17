@@ -1269,6 +1269,7 @@ func TestFullscreenBarShowsNoScrollbackHint(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g)) // settle the geometry before the resize branch would clear the flag
 	app.fullscreenNoScrollback = true
 
 	require.NoError(t, app.layout(app.g))
