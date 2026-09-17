@@ -15,6 +15,7 @@ type LineBuffer struct {
 	lines   []string
 	cap     int
 	lastRaw string // last raw capture; an idle pane feeds identical content
+	screenH int    // normalized height of the current screen (blank rows stripped)
 }
 
 // NewLineBuffer creates a buffer that keeps at most cap lines.
@@ -54,6 +55,14 @@ func (b *LineBuffer) Snapshot() []string {
 	return append([]string(nil), b.lines...)
 }
 
+// ScreenHeight returns the normalized height of the current screen (the
+// live portion of the buffer). Lines beyond it are accumulated history.
+func (b *LineBuffer) ScreenHeight() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.screenH
+}
+
 // update applies the diff-append algorithm. The caller holds the lock.
 func (b *LineBuffer) update(scr []string) []string {
 	// A shell's cursor row is always blank at the bottom and never scrolls
@@ -63,8 +72,9 @@ func (b *LineBuffer) update(scr []string) []string {
 		scr = scr[:len(scr)-1]
 	}
 	n := len(scr)
+	b.screenH = n
 	if len(b.lines) == 0 {
-		return scr
+		return capLines(scr, b.cap)
 	}
 	tail := b.lines
 	if len(tail) > n {

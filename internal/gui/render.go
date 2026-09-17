@@ -118,14 +118,21 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, result sessi
 		a.preview.MarkFetched(name, cursorSnapshot)
 	}
 	a.preview.Unlock()
-	a.feedBuffer(name, result.Full)
+	// Only feed history for sessions that still exist: a capture completing
+	// after its session vanished would recreate the pruned buffer, and a
+	// later session reusing the name would inherit stale pane content.
+	if a.hasSession(name) {
+		a.feedBuffer(name, result.Full)
+	}
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }
 
-// renderOptionsBar draws the keybinding hints. While the dashboard preview
-// is being scrolled it shows the scroll hints instead of the usual actions.
+// renderOptionsBar draws the keybinding hints. The bar follows panel focus,
+// not scroll state: j/k scroll whenever the preview has focus (the first
+// press enters scroll mode), so advertising anything else would lie in the
+// transition states.
 func (a *App) renderOptionsBar(v *gocui.View) {
-	if a.previewScroll.IsActive() {
+	if a.focusMain {
 		fmt.Fprintln(v, " "+presentation.StyledKey("j/k", "scroll")+"  "+
 			presentation.StyledKey("PgUp/PgDn", "page")+"  "+
 			presentation.StyledKey("g/G", "top/live")+"  "+

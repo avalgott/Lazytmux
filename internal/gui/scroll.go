@@ -299,8 +299,10 @@ func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, erro
 	}
 	// No tmux history: fall back to the synthetic buffer. bufferLookup does
 	// not create — an empty buffer must not exist for every attempted scroll.
+	// History is anything beyond the current screen, whose normalized height
+	// (blank cursor rows stripped) is smaller than the tmux pane height.
 	if b := a.bufferLookup(target); b != nil {
-		if snap := b.Snapshot(); len(snap) > preview.PaneHeight {
+		if snap := b.Snapshot(); len(snap) > b.ScreenHeight() {
 			return truncateLines(snap, width), preview.PaneHeight, nil
 		}
 	}

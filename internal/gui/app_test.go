@@ -1379,12 +1379,15 @@ func TestCaptureCompletionFeedsBuffer(t *testing.T) {
 func TestScrollSnapshotFallsBackToBufferForAltScreenPane(t *testing.T) {
 	p := &fakeProvider{paneHeight: 5}
 	app := newTestApp(t, p)
+	// One screen, then a scrolled screen: the buffer holds one real line of
+	// history beyond the current screen.
 	app.feedBuffer("devbox", strings.Join([]string{"h1", "h2", "h3", "h4", "h5", "h6", "h7"}, "\n"))
+	app.feedBuffer("devbox", strings.Join([]string{"h2", "h3", "h4", "h5", "h6", "h7", "h8"}, "\n"))
 
 	lines, paneH, err := app.fetchScrollSnapshot("devbox", 80)
 	require.NoError(t, err)
 	assert.Equal(t, 5, paneH, "pane height still reported for the noHistory check")
-	assert.Equal(t, []string{"h1", "h2", "h3", "h4", "h5", "h6", "h7"}, lines)
+	assert.Equal(t, []string{"h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8"}, lines)
 }
 
 func TestScrollSnapshotPrefersRealHistory(t *testing.T) {
@@ -1411,11 +1414,13 @@ func TestScrollSnapshotZeroHistoryWithoutBuffer(t *testing.T) {
 func TestScrollSnapshotTruncatesBufferToWidth(t *testing.T) {
 	p := &fakeProvider{paneHeight: 2}
 	app := newTestApp(t, p)
+	// One screen, then a scrolled screen, so the buffer holds history.
 	app.feedBuffer("devbox", "short\n"+strings.Repeat("w", 100)+"\ntail")
+	app.feedBuffer("devbox", strings.Repeat("w", 100)+"\ntail\nnext")
 
 	lines, _, err := app.fetchScrollSnapshot("devbox", 20)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"short", strings.Repeat("w", 20), "tail"}, lines)
+	assert.Equal(t, []string{"short", strings.Repeat("w", 20), "tail", "next"}, lines)
 }
 
 func TestScrollSnapshotConcurrentWithFeeds(t *testing.T) {
@@ -1619,4 +1624,53 @@ func TestWheelUpSkippedWhileHintActive(t *testing.T) {
 
 	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
 	assert.False(t, app.previewScroll.IsActive(), "no expensive re-load while the no-scrollback hint is showing")
+}
+
+// --- Balanced-review fixes ---
+
+func TestScrollSnapshotRecognizesStrippedBlankHistory(t *testing.T) {
+	p := &fakeProvider{paneHeight: 10}
+	app := newTestApp(t, p)
+	// A 10-row pane whose bottom row is always blank: two feeds accumulate
+	// exactly 10 stripped lines — one real line of history at len == paneHeight.
+	rows := make([]string, 9)
+	for i := range rows {
+		rows[i] = fmt.Sprintf("r%02d", i)
+	}
+	app.feedBuffer("devbox", screen(append(append([]string(nil), rows...), "")...))
+	scrolled := append(append([]string(nil), rows[1:]...), "r09", "")
+	app.feedBuffer("devbox", screen(scrolled...))
+
+	lines, _, err := app.fetchScrollSnapshot("devbox", 80)
+	require.NoError(t, err)
+	assert.Equal(t, 10, len(lines), "one scrolled-off line is real history despite len == paneHeight")
+	assert.Equal(t, "r00", lines[0])
+}
+
+func TestOptionsBarFollowsPanelFocus(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.focusMain = true // preview focused, not yet scrolling
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("options")
+	require.NoError(t, err)
+	assert.Contains(t, v.Buffer(), "scroll", "j/k scroll the preview while it has focus")
+	assert.NotContains(t, v.Buffer(), "move")
+}
+
+func TestLineBufferSeedsWithinCap(t *testing.T) {
+	b := NewLineBuffer(3)
+	b.Feed(screen("a", "b", "c", "d", "e"))
+	assert.Equal(t, []string{"c", "d", "e"}, b.Snapshot(), "the first feed must respect the cap")
+}
+
+func TestStaleCaptureDoesNotFeedBuffer(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+
+	// A capture for a session that is no longer in the list completes.
+	app.renderPreviewCapture("gone", 0, session.Preview{Full: "stale"}, nil)
+	assert.Nil(t, app.bufferLookup("gone"), "a stale capture must not recreate a vanished session's buffer")
 }

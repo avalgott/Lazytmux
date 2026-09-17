@@ -431,6 +431,18 @@ func (a *App) bufferLookup(name string) *LineBuffer {
 	return a.buffers[name]
 }
 
+// hasSession reports whether the session is in the current list. Used to
+// discard capture completions that arrive after their session disappeared —
+// feeding them would recreate the vanished session's buffer.
+func (a *App) hasSession(name string) bool {
+	for _, s := range a.sessions {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // appendLog adds an entry to the log, trimming the oldest entries when the
 // log grows past maxLogEntries. A message identical to the previous one
 // (e.g. the no-scrollback note on every wheel gesture) refreshes the
