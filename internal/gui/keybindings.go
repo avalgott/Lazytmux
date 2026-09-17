@@ -416,9 +416,9 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 		// callback discards itself if the user left this fullscreen session
 		// while the query was in flight.
 		target := a.fullscreen.Target()
-		fsGen := a.fullscreenGen
+		fsGen := a.fullscreenGen.Load()
 		go func() {
-			d, actErr := a.decideFullscreenWheel(target, delta, x, y, hasPos)
+			d, actErr := a.decideFullscreenWheel(target, fsGen, delta, x, y, hasPos)
 			if d == wheelForwarded || d == wheelIgnored {
 				return
 			}
@@ -459,9 +459,15 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 // decideFullscreenWheel runs the tmux queries for a live fullscreen wheel
 // event and returns the decision without touching UI state — safe to run
 // from a goroutine.
-func (a *App) decideFullscreenWheel(target string, delta, x, y int, hasPos bool) (wheelDecision, error) {
+func (a *App) decideFullscreenWheel(target string, fsGen uint64, delta, x, y int, hasPos bool) (wheelDecision, error) {
 	alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
 	if err == nil && alt && mouse {
+		// The user may have left this fullscreen session while the flags
+		// query was in flight — do not inject input into a pane that is no
+		// longer on screen.
+		if a.fullscreenGen.Load() != fsGen {
+			return wheelIgnored, nil
+		}
 		if hasPos {
 			cx, cy = x, y
 		}
@@ -484,8 +490,8 @@ func (a *App) decideFullscreenWheel(target string, delta, x, y int, hasPos bool)
 // wheelFallbackCurrent reports whether the fullscreen state that initiated a
 // wheel decision is still the live one — a slow query must not apply its
 // fallback to a session the user has since left.
-func (a *App) wheelFallbackCurrent(fsGen int, target string) bool {
-	return a.fullscreenGen == fsGen && a.fullscreen.IsActive() && a.fullscreen.Target() == target
+func (a *App) wheelFallbackCurrent(fsGen uint64, target string) bool {
+	return a.fullscreenGen.Load() == fsGen && a.fullscreen.IsActive() && a.fullscreen.Target() == target
 }
 
 // performWheelAction applies a wheel decision on the event loop.

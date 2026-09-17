@@ -686,7 +686,7 @@ func TestScrollModeWheelAndToggle(t *testing.T) {
 	// (perform).
 	app.fullscreen.Enter("devbox")
 	require.NoError(t, app.layout(app.g))
-	d, err := app.decideFullscreenWheel("devbox", -3, 0, 0, false)
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
 	require.NoError(t, err)
 	assert.Equal(t, wheelFallback, d)
 	app.performWheelAction(d, -3, nil)
@@ -1293,7 +1293,7 @@ func TestFullscreenWheelForwardsToMousePane(t *testing.T) {
 	app.fullscreen.Enter("devbox")
 
 	// Wheel-up goes to the pane's program, not to scroll mode.
-	d, err := app.decideFullscreenWheel("devbox", -3, 0, 0, false)
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
 	require.NoError(t, err)
 	assert.Equal(t, wheelForwarded, d)
 	assert.False(t, app.scroll.IsActive(), "the wheel must not enter scroll mode over a mouse-tracking pane")
@@ -1301,7 +1301,7 @@ func TestFullscreenWheelForwardsToMousePane(t *testing.T) {
 	assert.Equal(t, wheelCall{name: "devbox", up: true, x: 10, y: 5}, p.wheelSnapshot()[0])
 
 	// Wheel-down too.
-	d, err = app.decideFullscreenWheel("devbox", 3, 0, 0, false)
+	d, err = app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), 3, 0, 0, false)
 	require.NoError(t, err)
 	assert.Equal(t, wheelForwarded, d)
 	require.Len(t, p.wheelSnapshot(), 2)
@@ -1314,7 +1314,7 @@ func TestFullscreenWheelFallsBackToScrollModeWithoutMouse(t *testing.T) {
 	app.fullscreen.Enter("devbox")
 	require.NoError(t, app.layout(app.g))
 
-	d, err := app.decideFullscreenWheel("devbox", -3, 0, 0, false)
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
 	require.NoError(t, err)
 	assert.Equal(t, wheelFallback, d)
 	app.performWheelAction(d, -3, nil)
@@ -1327,7 +1327,7 @@ func TestFullscreenWheelFallsBackOnFlagError(t *testing.T) {
 	app.fullscreen.Enter("devbox")
 	require.NoError(t, app.layout(app.g))
 
-	d, err := app.decideFullscreenWheel("devbox", -3, 0, 0, false)
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
 	require.NoError(t, err)
 	assert.Equal(t, wheelFallback, d)
 	app.performWheelAction(d, -3, nil)
@@ -1627,7 +1627,7 @@ func TestFullscreenWheelDownAtBottomDoesNothing(t *testing.T) {
 	app.fullscreen.Enter("devbox")
 	require.NoError(t, app.layout(app.g))
 
-	d, err := app.decideFullscreenWheel("devbox", 3, 0, 0, false)
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), 3, 0, 0, false)
 	require.NoError(t, err)
 	assert.Equal(t, wheelIgnored, d)
 	assert.False(t, app.scroll.IsActive(), "wheel-down at the live bottom must not start a whole-history load")
@@ -1756,7 +1756,7 @@ func TestFullscreenWheelForwardFailureFallsBackToScrollMode(t *testing.T) {
 	// Make the wheel forward fail while the flags query still succeeds.
 	p.wheelErr = assert.AnError
 
-	d, err := app.decideFullscreenWheel("devbox", -3, 0, 0, false)
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
 	require.Error(t, err)
 	assert.Equal(t, wheelFallback, d)
 	app.performWheelAction(d, -3, err)
@@ -1769,7 +1769,7 @@ func TestFullscreenWheelFallsBackWithoutSGRMouse(t *testing.T) {
 	app.fullscreen.Enter("devbox")
 	require.NoError(t, app.layout(app.g))
 
-	d, err := app.decideFullscreenWheel("devbox", -3, 0, 0, false)
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
 	require.NoError(t, err)
 	assert.Equal(t, wheelFallback, d)
 	app.performWheelAction(d, -3, nil)
@@ -1925,7 +1925,7 @@ func TestFullscreenWheelForwardUsesEventCoords(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
 
-	d, err := app.decideFullscreenWheel("devbox", -3, 12, 7, true)
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 12, 7, true)
 	require.NoError(t, err)
 	assert.Equal(t, wheelForwarded, d)
 	require.Len(t, p.wheelSnapshot(), 1)
@@ -1982,7 +1982,7 @@ func TestWheelDecisionOffloadsTmuxWork(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
 
-	d, err := app.decideFullscreenWheel("devbox", -3, 0, 0, false)
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
 	require.NoError(t, err)
 	assert.Equal(t, wheelForwarded, d)
 	require.Len(t, p.wheelSnapshot(), 1)
@@ -1996,7 +1996,7 @@ func TestWheelDecisionFallbackPerformsOnEventLoop(t *testing.T) {
 	app.fullscreen.Enter("devbox")
 	require.NoError(t, app.layout(app.g))
 
-	d, err := app.decideFullscreenWheel("devbox", -3, 0, 0, false)
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
 	require.NoError(t, err)
 	assert.Equal(t, wheelFallback, d)
 	app.performWheelAction(d, -3, nil)
@@ -2030,7 +2030,7 @@ func TestWheelDecisionConcurrentWithFullscreenChanges(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				_, _ = app.decideFullscreenWheel("devbox", -3, 0, 0, false)
+				_, _ = app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
 			}
 		}()
 	}
@@ -2084,7 +2084,7 @@ func TestWheelFallbackDiscardedAfterLeavingFullscreen(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
-	fsGen := app.fullscreenGen
+	fsGen := app.fullscreenGen.Load()
 	assert.True(t, app.wheelFallbackCurrent(fsGen, "devbox"))
 
 	app.exitFullScreen()
@@ -2145,4 +2145,22 @@ func TestPreviewScrollExitsOnRecycledID(t *testing.T) {
 	// Same name, same recycled ID, new creation time: a different session.
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 200}}, nil)
 	assert.False(t, app.previewScroll.IsActive(), "a recycled ID with a new creation time must drop the frozen snapshot")
+}
+
+// --- Copilot round-14 fix: no input injection after leaving fullscreen ---
+
+func TestWheelForwardDiscardedAfterLeavingFullscreen(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	fsGen := app.fullscreenGen.Load()
+
+	// The user left the session while the flags query was in flight.
+	app.exitFullScreen()
+
+	d, err := app.decideFullscreenWheel("devbox", fsGen, -3, 0, 0, false)
+	require.NoError(t, err)
+	assert.Equal(t, wheelIgnored, d)
+	assert.Empty(t, p.wheelSnapshot(), "no input may be injected into a pane after leaving its fullscreen session")
 }

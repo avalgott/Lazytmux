@@ -77,8 +77,8 @@ type App struct {
 	// tmux scrollback history (alternate-screen programs like Claude Code),
 	// so the status bar can say so and the wheel forwards to the pane.
 	fullscreenNoScrollback bool
-	fullscreenGen          int // bumped on enter/exit; stale async callbacks compare against it
-	lastResizeW            int // and the size it was resized to
+	fullscreenGen          atomic.Uint64 // bumped on enter/exit; async callbacks compare against it
+	lastResizeW            int           // and the size it was resized to
 	lastResizeH            int
 	logs                   []logEntry  // recent status/error messages, shown in the logs panel
 	refreshBusy            atomic.Bool // true while a background session refresh is in flight
@@ -373,7 +373,7 @@ func (a *App) enterFullScreen() {
 	a.previewScrollTarget = ""
 	a.previewScrollTargetID = ""
 	a.fullscreenNoScrollback = false
-	a.fullscreenGen++
+	a.fullscreenGen.Add(1)
 	a.scrollHintName = ""
 	a.scrollHintIdent = ""
 	a.scrollHintMsg = ""
@@ -387,7 +387,7 @@ func (a *App) exitFullScreen() {
 	a.scroll.Exit()
 	a.fullscreen.Exit()
 	a.fullscreenNoScrollback = false
-	a.fullscreenGen++
+	a.fullscreenGen.Add(1)
 	a.preview.Invalidate()
 }
 
