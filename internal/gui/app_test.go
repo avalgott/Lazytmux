@@ -2264,10 +2264,15 @@ func TestWheelQueueProcessesInArrivalOrder(t *testing.T) {
 	p := &fakeProvider{altOn: true, sgrMouse: true}
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
 
 	tasks := []wheelTask{
-		{target: "devbox", delta: -3, hasPos: true, x: 1, y: 1},
-		{target: "devbox", delta: 3, hasPos: true, x: 1, y: 1},
+		{target: "devbox", fsGen: app.fullscreenGen.Load(), wGen: app.wheelGen.Load(),
+			exitGen: app.wheelExitGen.Load(), sGen: app.sessionGen.Load(), uGen: app.userScrollGen.Load(),
+			delta: -3, hasPos: true, x: 1, y: 1},
+		{target: "devbox", fsGen: app.fullscreenGen.Load(), wGen: app.wheelGen.Load(),
+			exitGen: app.wheelExitGen.Load(), sGen: app.sessionGen.Load(), uGen: app.userScrollGen.Load(),
+			delta: 3, hasPos: true, x: 1, y: 1},
 	}
 	for i := range tasks {
 		app.enqueueWheelTask(tasks[i])
