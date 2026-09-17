@@ -311,6 +311,11 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 		a.fsMu.Lock()
 		a.sessionGen.Add(1)
 		a.fsMu.Unlock()
+		// The per-target fullscreen caches are keyed by name: a same-name
+		// recreation must not inherit the dead pane's verdicts or skip the
+		// replacement window's resize.
+		a.lastResizeName = ""
+		a.fullscreenNoScrollback = false
 	}
 	for name := range a.buffers {
 		found := false

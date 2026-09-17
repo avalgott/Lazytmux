@@ -2565,3 +2565,38 @@ func TestStaleWheelTaskSkippedBeforeTmux(t *testing.T) {
 	p.mu.Unlock()
 	assert.Zero(t, n, "a stale task must not run the blocking flags query")
 }
+
+// --- Copilot round-30 fixes ---
+
+func TestFullscreenCachesResetOnIdentityChange(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreenNoScrollback = true
+	app.lastResizeName = "devbox"
+
+	// Any identity change must clear the per-target fullscreen caches.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}, {Name: "other", ID: "$9"}}, nil)
+	assert.False(t, app.fullscreenNoScrollback, "the no-scrollback verdict must not describe a dead pane")
+	assert.Equal(t, "", app.lastResizeName, "the resize cache must not skip resizing a recreated window")
+}
+
+func TestScrollHintSkippedOnlyWhileBufferEmpty(t *testing.T) {
+	p := &fakeProvider{paneHeight: 5}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+	app.scrollHintName = "devbox"
+	app.scrollHintIdent = sessionIdentity(app.sessions[0])
+	app.scrollHintUntil = time.Now().Add(time.Minute)
+
+	// Empty buffer: the hint still suppresses the expensive load.
+	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive(), "an empty buffer keeps the hint in force")
+
+	// The program starts streaming: the buffer gains history, and the next
+	// gesture must browse instead of being suppressed.
+	app.feedBuffer("devbox", "h1\nh2\nh3\nh4\nh5\nh6\nh7")
+	app.feedBuffer("devbox", "h2\nh3\nh4\nh5\nh6\nh7\nh8")
+	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
+	assert.True(t, app.previewScroll.IsActive(), "history in the buffer must override the stale hint")
+}
