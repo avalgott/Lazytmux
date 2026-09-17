@@ -12,6 +12,7 @@ type PreviewCache struct {
 	content string    // last successfully captured pane content
 	name    string    // session name the content was captured from
 	gen     uint64    // session generation the content belongs to
+	paneID  string    // the pane the content was captured from
 	cursor  int       // session cursor index when content was captured
 	cursorX int       // tmux pane cursor column
 	cursorY int       // tmux pane cursor row
@@ -36,6 +37,10 @@ func (pc *PreviewCache) Name() string { return pc.name }
 // must hold lock.
 func (pc *PreviewCache) Gen() uint64 { return pc.gen }
 
+// PaneID returns the pane the cached content came from. Caller must hold
+// lock.
+func (pc *PreviewCache) PaneID() string { return pc.paneID }
+
 // Cursor returns the session cursor index at capture time. Caller must hold lock.
 func (pc *PreviewCache) Cursor() int { return pc.cursor }
 
@@ -57,10 +62,11 @@ func (pc *PreviewCache) Stale(threshold time.Duration) bool {
 func (pc *PreviewCache) SetBusy(b bool) { pc.busy = b }
 
 // Update stores the result of a successful capture. Caller must hold lock.
-func (pc *PreviewCache) Update(name, content string, gen uint64, cursorIdx, cursorX, cursorY int) {
+func (pc *PreviewCache) Update(name, content string, gen uint64, paneID string, cursorIdx, cursorX, cursorY int) {
 	pc.content = content
 	pc.name = name
 	pc.gen = gen
+	pc.paneID = paneID
 	pc.cursor = cursorIdx
 	pc.cursorX = cursorX
 	pc.cursorY = cursorY

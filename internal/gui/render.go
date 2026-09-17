@@ -72,10 +72,14 @@ func (a *App) renderPreview(v *gocui.View) {
 	cache := a.preview.Content()
 	cacheName := a.preview.Name()
 	cacheGen := a.preview.Gen()
+	cachePane := a.preview.PaneID()
 	cachedCursor := a.preview.Cursor()
 	paneCursorX := a.preview.CursorX()
 	paneCursorY := a.preview.CursorY()
-	needFetch := !a.preview.Busy() && (cacheName != sess.Name || cachedCursor != a.cursor || a.preview.Stale(staleAfter) || cacheGen != a.sessionGen.Load())
+	a.buffersMu.Lock()
+	recordedPane := a.paneIDs[sess.Name]
+	a.buffersMu.Unlock()
+	needFetch := !a.preview.Busy() && (cacheName != sess.Name || cachedCursor != a.cursor || a.preview.Stale(staleAfter) || cacheGen != a.sessionGen.Load() || (cachePane != "" && recordedPane != "" && cachePane != recordedPane))
 	if needFetch {
 		a.preview.SetBusy(true)
 	}
@@ -91,7 +95,8 @@ func (a *App) renderPreview(v *gocui.View) {
 		}()
 	}
 
-	if cache != "" && cacheName == sess.Name && cachedCursor == a.cursor && cacheGen == a.sessionGen.Load() {
+	if cache != "" && cacheName == sess.Name && cachedCursor == a.cursor && cacheGen == a.sessionGen.Load() &&
+		(cachePane == "" || recordedPane == "" || cachePane == recordedPane) {
 		fmt.Fprint(v, cache)
 		v.SetCursor(clampInt(paneCursorX, 0, previewW-1), clampInt(paneCursorY, 0, previewH-1))
 		return
@@ -143,7 +148,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 		a.preview.ClearContent()
 	}
 	if err == nil {
-		a.preview.Update(name, result.Content, gen, cursorSnapshot, result.CursorX, result.CursorY)
+		a.preview.Update(name, result.Content, gen, result.PaneID, cursorSnapshot, result.CursorX, result.CursorY)
 	} else {
 		// Failed capture (e.g. session died between refresh cycles) —
 		// mark fetched so we don't retry on every render.
@@ -151,7 +156,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 	}
 	a.preview.Unlock()
 	if err == nil {
-		a.feedBufferIfCurrent(name, gen, result.Full)
+		a.feedBufferIfCurrent(name, gen, result.PaneID, result.Full)
 	}
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }

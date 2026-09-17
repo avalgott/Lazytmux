@@ -553,13 +553,18 @@ func (a *App) feedBuffer(name, content string) {
 // same lock that applySessionRefresh holds while bumping the generation and
 // pruning buffers, so a refresh cannot interleave between them (a stale
 // completion would otherwise recreate a pruned buffer).
-func (a *App) feedBufferIfCurrent(name string, gen uint64, content string) {
+func (a *App) feedBufferIfCurrent(name string, gen uint64, paneID, content string) {
 	if name == "" || content == "" {
 		return
 	}
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
 	if a.sessionGen.Load() != gen {
+		return
+	}
+	// The capture belongs to a specific pane: if the binding moved on while
+	// it was in flight, its content must not enter the new pane's history.
+	if paneID != "" && a.paneIDs[name] != "" && a.paneIDs[name] != paneID {
 		return
 	}
 	a.feedBufferLocked(name, content)

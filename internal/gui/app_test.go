@@ -1794,7 +1794,7 @@ func TestFullscreenWheelFallsBackWithoutSGRMouse(t *testing.T) {
 func TestMarkFetchedClearsForeignContent(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.preview.Lock()
-	app.preview.Update("session-A", "A-CONTENT", 0, 0, 0, 0)
+	app.preview.Update("session-A", "A-CONTENT", 0, "", 0, 0, 0)
 	app.preview.MarkFetched("session-B", 0, 0)
 	assert.Equal(t, "", app.preview.Content(), "a failed fetch for another session must not retag the old content")
 	app.preview.Unlock()
@@ -1803,7 +1803,7 @@ func TestMarkFetchedClearsForeignContent(t *testing.T) {
 func TestMarkFetchedKeepsOwnContent(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.preview.Lock()
-	app.preview.Update("session-A", "A-CONTENT", 0, 0, 0, 0)
+	app.preview.Update("session-A", "A-CONTENT", 0, "", 0, 0, 0)
 	app.preview.MarkFetched("session-A", 0, 0)
 	assert.Equal(t, "A-CONTENT", app.preview.Content(), "a failed fetch for the same session keeps the cached content")
 	app.preview.Unlock()
@@ -2459,7 +2459,7 @@ func TestStaleGenPreviewLoadRestarts(t *testing.T) {
 func TestMarkFetchedClearsForeignGeneration(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.preview.Lock()
-	app.preview.Update("devbox", "OLD-SCREEN", 1, 0, 0, 0)
+	app.preview.Update("devbox", "OLD-SCREEN", 1, "", 0, 0, 0)
 	// A failed capture for the recreated incarnation must not retag the
 	// previous pane's content.
 	app.preview.MarkFetched("devbox", 2, 0)
@@ -2798,4 +2798,37 @@ func TestAdoptPaneDoesNotOverwriteNewerBinding(t *testing.T) {
 	recorded = app.paneIDs["devbox"]
 	app.buffersMu.Unlock()
 	assert.Equal(t, "%3", recorded, "a newer capture wins over the stale snapshot")
+}
+
+// --- Copilot round-40 fixes ---
+
+func TestStalePaneCacheNotRendered(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "OLD-PANE-SCREEN", Full: "P", PaneID: "%1"}, nil)
+
+	// The active pane changed after the cache was populated.
+	app.buffersMu.Lock()
+	app.paneIDs["devbox"] = "%2"
+	app.buffersMu.Unlock()
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.NotContains(t, v.Buffer(), "OLD-PANE-SCREEN", "the old pane's cached screen must not render under the new pane")
+}
+
+func TestStalePaneFeedSkipped(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+
+	// The active pane changed; the in-flight capture for the old pane lands.
+	app.buffersMu.Lock()
+	app.paneIDs["devbox"] = "%2"
+	app.buffersMu.Unlock()
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "Q", Full: "old-pane-history", PaneID: "%1"}, nil)
+
+	assert.Nil(t, app.bufferLookup("devbox"), "the old pane's feed must not create a buffer under the new pane")
 }
