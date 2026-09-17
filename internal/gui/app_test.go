@@ -2595,6 +2595,7 @@ func TestScrollHintSkippedOnlyWhileBufferEmpty(t *testing.T) {
 
 	// The program starts streaming: the buffer gains history, and the next
 	// gesture must browse instead of being suppressed.
+	require.NoError(t, app.layout(app.g))
 	app.feedBuffer("devbox", "h1\nh2\nh3\nh4\nh5\nh6\nh7")
 	app.feedBuffer("devbox", "h2\nh3\nh4\nh5\nh6\nh7\nh8")
 	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
