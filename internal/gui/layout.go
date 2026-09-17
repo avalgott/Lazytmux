@@ -113,9 +113,17 @@ func (a *App) layout(g *gocui.Gui) error {
 		a.lastWidth = maxX
 		a.lastHeight = maxY
 		// Queued wheel work was captured for the old geometry: invalidate
-		// forwards and fallbacks alike so the resize reset holds.
+		// forwards and fallbacks alike so the resize reset holds. The bumps
+		// are serialized with fsMu — a forward holds it across its check
+		// and the send, so the resize either lands first (the check rejects
+		// the old-coordinate event) or waits for the send to finish.
+		a.fsMu.Lock()
 		a.wheelGen.Add(1)
 		a.wheelExitGen.Add(1)
+		a.fsMu.Unlock()
+		// The pane geometry changed: the no-scrollback verdict no longer
+		// describes the current screen.
+		a.fullscreenNoScrollback = false
 		blankScreen(g, maxX, maxY)
 		// The scroll viewport dimensions are tied to the pane geometry;
 		// leave scroll mode so the next entry recomputes them at the new
