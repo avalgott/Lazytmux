@@ -2105,3 +2105,44 @@ func TestScrollHintNotInheritedByRecycledID(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, v.Title, "Hit Enter", "a recycled ID with a new creation time must not inherit the hint")
 }
+
+// --- Copilot round-13 fixes ---
+
+func TestBufferBindingClearedOnCreation(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}}, nil)
+	app.feedBuffer("devbox", "first")
+	// Identity mismatch: the buffer dies, the binding moves to the new identity.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2", Created: 200}}, nil)
+	// The session vanishes; its binding entry would linger unpruned.
+	app.applySessionRefresh(nil, nil)
+	// A new incarnation feeds a fresh buffer and must keep it.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2", Created: 300}}, nil)
+	app.feedBuffer("devbox", "second")
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2", Created: 300}}, nil)
+	assert.NotNil(t, app.bufferLookup("devbox"), "a fresh buffer must not be deleted by a lingering stale binding")
+}
+
+func TestNoHistoryHintStaleLoadDiscarded(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	seq := app.previewScroll.seq
+
+	// The user leaves scroll browsing before the async flags query returns.
+	app.exitPreviewScroll()
+	assert.False(t, app.noHistoryHintCurrent("devbox", seq), "a stale hint callback must not touch the newer state")
+}
+
+func TestPreviewScrollExitsOnRecycledID(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$0", Created: 100}}
+	app.previewScrollTarget = "devbox"
+	app.previewScrollTargetID = "$0@100"
+	app.previewScroll.Enter(10, 78)
+
+	// Same name, same recycled ID, new creation time: a different session.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 200}}, nil)
+	assert.False(t, app.previewScroll.IsActive(), "a recycled ID with a new creation time must drop the frozen snapshot")
+}

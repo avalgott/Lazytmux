@@ -411,17 +411,21 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 			return
 		}
 		// The tmux round-trips run off the event loop: each can block for
-		// the client timeout, and queuing wheel input must not freeze the
-		// UI. The target is captured up front — the fullscreen state is
-		// event-loop owned.
+		// the client timeout, and queuing wheel input must not freeze the UI.
+		// The target and fullscreen generation are captured up front — the
+		// callback discards itself if the user left this fullscreen session
+		// while the query was in flight.
 		target := a.fullscreen.Target()
+		fsGen := a.fullscreenGen
 		go func() {
 			d, actErr := a.decideFullscreenWheel(target, delta, x, y, hasPos)
 			if d == wheelForwarded || d == wheelIgnored {
 				return
 			}
 			a.g.Update(func(*gocui.Gui) error {
-				a.performWheelAction(d, delta, actErr)
+				if a.wheelFallbackCurrent(fsGen, target) {
+					a.performWheelAction(d, delta, actErr)
+				}
 				return nil
 			})
 		}()

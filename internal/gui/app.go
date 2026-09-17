@@ -349,7 +349,8 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 	if a.previewScroll.IsActive() {
 		cur, curID := "", ""
 		if sess := a.currentSession(); sess != nil {
-			cur, curID = sess.Name, sess.ID
+			cur = sess.Name
+			curID = sess.ID + "@" + strconv.FormatInt(sess.Created, 10)
 		}
 		if cur != a.previewScrollTarget || curID != a.previewScrollTargetID {
 			a.previewScroll.Exit()
@@ -484,6 +485,10 @@ func (a *App) feedBufferLocked(name, content string) {
 	}
 	b := a.buffers[name]
 	if b == nil {
+		// A fresh buffer starts unbound: any lingering binding from a
+		// previous incarnation would otherwise get the buffer deleted on
+		// the next refresh.
+		delete(a.bufferIDs, name)
 		b = NewLineBuffer(scrollBufferCap)
 		a.buffers[name] = b
 	}

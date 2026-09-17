@@ -399,7 +399,7 @@ func (a *App) enterPreviewScroll() {
 		width = 1
 	}
 	a.previewScrollTarget = sess.Name
-	a.previewScrollTargetID = sess.ID
+	a.previewScrollTargetID = sess.ID + "@" + strconv.FormatInt(sess.Created, 10)
 	a.previewScroll.Enter(viewH, width)
 	a.restartPreviewScrollLoad()
 }
@@ -443,15 +443,26 @@ func (a *App) applyPreviewScrollLoad(seq int64, lines []string, paneH int, loadE
 	if noHistory {
 		name := a.previewScrollTarget
 		// The pane-flags query can block for the client timeout: run it off
-		// the event loop and apply the hint back on it.
+		// the event loop and apply the hint back on it — but only if this
+		// load is still the current one (the user may have left browsing or
+		// switched sessions while the query was in flight).
+		seq := a.previewScroll.seq
 		go func() {
 			alt, sgr, _, _, ferr := a.svc.PaneInputFlags(context.Background(), name)
 			a.g.Update(func(*gocui.Gui) error {
-				a.applyNoHistoryHint(name, alt, sgr, ferr != nil)
+				if a.noHistoryHintCurrent(name, seq) {
+					a.applyNoHistoryHint(name, alt, sgr, ferr != nil)
+				}
 				return nil
 			})
 		}()
 	}
+}
+
+// noHistoryHintCurrent reports whether the scroll load that launched the
+// hint query is still the live preview scroll.
+func (a *App) noHistoryHintCurrent(name string, seq int64) bool {
+	return a.previewScrollTarget == name && a.previewScroll.IsActive() && a.previewScroll.seq == seq
 }
 
 // applyNoHistoryHint shows the no-scrollback hint for a session whose
