@@ -80,9 +80,11 @@ func (pc *PreviewCache) InvalidateTimestamp() {
 
 // MarkFetched records the current time as the last fetch time and clears busy,
 // without updating the cached content. Use after a fetch that returned no
-// useful data to prevent tight retry loops.
+// useful data to prevent tight retry loops. The session name is recorded so
+// the fetch gate does not keep firing over the stale-name mismatch.
 // Caller must hold lock.
-func (pc *PreviewCache) MarkFetched(cursorIdx int) {
+func (pc *PreviewCache) MarkFetched(name string, cursorIdx int) {
+	pc.name = name
 	pc.cursor = cursorIdx
 	pc.busy = false
 	pc.fetchAt = time.Now()

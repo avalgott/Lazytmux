@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"slices"
 	"strings"
 	"sync"
 )
@@ -10,9 +11,10 @@ import (
 // diffs the new screen against the tail: scrolled-in lines are appended,
 // in-place repaints update the tail, full redraws replace it.
 type LineBuffer struct {
-	mu    sync.Mutex
-	lines []string
-	cap   int
+	mu      sync.Mutex
+	lines   []string
+	cap     int
+	lastRaw string // last raw capture; an idle pane feeds identical content
 }
 
 // NewLineBuffer creates a buffer that keeps at most cap lines.
@@ -30,9 +32,18 @@ func (b *LineBuffer) Feed(content string) {
 	if content == "" {
 		return
 	}
-	scr := strings.Split(content, "\n")
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if content == b.lastRaw {
+		return // idle pane: nothing changed since the last capture
+	}
+	b.lastRaw = content
+	scr := strings.Split(content, "\n")
+	// Split returns substrings that alias the whole capture; cloning keeps
+	// each retained line from pinning its entire capture in memory.
+	for i, l := range scr {
+		scr[i] = strings.Clone(l)
+	}
 	b.lines = b.update(scr)
 }
 
@@ -78,7 +89,7 @@ func (b *LineBuffer) update(scr []string) []string {
 		return capLines(append(append([]string(nil), b.lines[:len(b.lines)-n]...), scr...), b.cap)
 	}
 	// Buffer shorter than the screen: extend without duplicating the overlap.
-	if m := len(b.lines); m > 0 && equal(b.lines, scr[:m]) {
+	if m := len(b.lines); m > 0 && slices.Equal(b.lines, scr[:m]) {
 		return capLines(append(b.lines, scr[m:]...), b.cap)
 	}
 	return capLines(append(b.lines, scr...), b.cap)
@@ -96,7 +107,7 @@ func shiftUp(tail, scr []string) (int, bool) {
 		if ov < max(2, n*3/5) {
 			return 0, false
 		}
-		if equal(tail[d:], scr[:ov]) {
+		if slices.Equal(tail[d:], scr[:ov]) {
 			return d, true
 		}
 	}
@@ -114,7 +125,7 @@ func shiftDown(tail, scr []string) (int, bool) {
 		if ov < max(2, n*3/5) {
 			return 0, false
 		}
-		if equal(tail[:ov], scr[d:]) {
+		if slices.Equal(tail[:ov], scr[d:]) {
 			return d, true
 		}
 	}
@@ -145,28 +156,9 @@ func majorityFresh(cands, buf []string) bool {
 	return fresh*2 > len(cands)
 }
 
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func capLines(lines []string, cap int) []string {
 	if len(lines) <= cap {
 		return lines
 	}
 	return lines[len(lines)-cap:]
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

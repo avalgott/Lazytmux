@@ -108,7 +108,8 @@ func (a *App) setupKeybindings() error {
 		}
 	}
 
-	// Mouse wheel: enters scroll mode and scrolls (fullscreen only).
+	// Mouse wheel: scrolls the preview panel on the dashboard and enters
+	// scroll mode in fullscreen (or forwards to a mouse-tracking pane).
 	if err := a.g.SetKeybinding("", gocui.MouseWheelUp, gocui.ModNone, a.wheelHandler(-3)); err != nil {
 		return err
 	}
@@ -183,10 +184,15 @@ func (a *App) cursorMoveHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 // cycleFocusHandler toggles dashboard focus between the sessions list and the
 // main preview panel. Guarded against dialogs (their inputs have their own
 // bindings) and fullscreen (Tab is forwarded to the pane in live mode and
-// must not leak into a focus change in scroll mode).
+// must not leak into a focus change in scroll mode). Focus changes end
+// preview scrolling: the options bar advertises j/k as scrolling only while
+// the mode is active.
 func (a *App) cycleFocusHandler(g *gocui.Gui, v *gocui.View) error {
 	if a.dialog != DialogNone || a.fullscreen.IsActive() {
 		return nil
+	}
+	if a.previewScroll.IsActive() {
+		a.exitPreviewScroll()
 	}
 	a.focusMain = !a.focusMain
 	a.g.Update(func(*gocui.Gui) error { return nil })
@@ -351,15 +357,25 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 	return func(g *gocui.Gui, v *gocui.View) error {
 		if a.fullscreen.IsActive() {
-			if !a.scroll.IsActive() {
-				target := a.fullscreen.Target()
-				alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
-				if err == nil && alt && mouse {
-					_ = a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy)
-					return nil
-				}
-				a.enterScrollMode()
+			if a.scroll.IsActive() {
+				a.scroll.Move(delta)
+				a.g.Update(func(*gocui.Gui) error { return nil })
+				return nil
 			}
+			target := a.fullscreen.Target()
+			alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
+			if err == nil && alt && mouse {
+				if ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy); ferr != nil {
+					a.setError(fmt.Sprintf("forward wheel: %v", ferr))
+				}
+				return nil
+			}
+			// Wheel-down at the live bottom has nothing to browse; entering
+			// would start a whole-history load that pins at the bottom.
+			if delta > 0 {
+				return nil
+			}
+			a.enterScrollMode()
 			a.scroll.Move(delta)
 			a.g.Update(func(*gocui.Gui) error { return nil })
 			return nil

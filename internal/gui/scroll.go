@@ -375,6 +375,11 @@ func (a *App) enterPreviewScroll() {
 	if sess == nil {
 		return
 	}
+	// A recent no-scrollback verdict for this session is still valid: skip
+	// the expensive whole-history load while the hint is showing.
+	if a.scrollHintName == sess.Name && time.Now().Before(a.scrollHintUntil) {
+		return
+	}
 	v, err := a.g.View("main")
 	if err != nil {
 		return

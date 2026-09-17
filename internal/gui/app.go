@@ -328,6 +328,8 @@ func (a *App) enterFullScreen() {
 	a.previewScroll.Exit()
 	a.previewScrollTarget = ""
 	a.fullscreenNoScrollback = false
+	a.scrollHintName = ""
+	a.scrollHintUntil = time.Time{}
 	a.preview.Invalidate()
 	a.fullscreen.Enter(sess.Name)
 }

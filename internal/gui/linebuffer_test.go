@@ -141,3 +141,43 @@ func TestLineBufferStripsTrailingBlankRows(t *testing.T) {
 	b.Feed(screen("c", "d", "e", ""))
 	assert.Equal(t, []string{"a", "b", "c", "d", "e"}, b.Snapshot())
 }
+
+func TestLineBufferRotationsDoNotDuplicate(t *testing.T) {
+	b := NewLineBuffer(100)
+	a := []string{"A00", "A01", "A02", "A03", "A04", "A05", "A06", "A07", "A08", "A09", "A10"}
+	b.Feed(screen(a...))
+
+	// Rotate right (an older line reappears at the top) then back to the
+	// original: the buffer must hold each line exactly once.
+	rot := append([]string{"A10"}, a[:10]...)
+	b.Feed(screen(rot...))
+	b.Feed(screen(a...))
+	snap := b.Snapshot()
+	assert.Equal(t, a, snap, "rotations must not duplicate or drop lines")
+
+	// Rotate left the same way.
+	b2 := NewLineBuffer(100)
+	b2.Feed(screen(a...))
+	rotL := append(append([]string(nil), a[1:]...), "A00")
+	b2.Feed(screen(rotL...))
+	b2.Feed(screen(a...))
+	assert.Equal(t, a, b2.Snapshot(), "rotations must not duplicate or drop lines")
+}
+
+func TestLineBufferPaneResizeReplacesScreenRegion(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("h1", "h2", "h3", "s1", "s2", "s3")) // history + 3-row screen
+	// The pane grows: the new 5-row screen supersedes the old one; the
+	// history lines stay.
+	b.Feed(screen("s1", "s2", "s3", "s4", "s5"))
+	snap := b.Snapshot()
+	assert.Equal(t, []string{"h1", "h2", "h3", "s1", "s2", "s3", "s4", "s5"}, snap,
+		"a resize replaces the old screen region instead of appending a duplicate")
+}
+
+func TestLineBufferIdleFeedIsNoop(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b", "c"))
+	b.Feed(screen("a", "b", "c")) // byte-identical: nothing to do
+	assert.Equal(t, []string{"a", "b", "c"}, b.Snapshot())
+}

@@ -47,7 +47,8 @@ func (a *App) renderPreview(v *gocui.View) {
 	v.Title = fmt.Sprintf(" %s ", sess.Name)
 	// A recent scroll attempt on a session without scrollback explains
 	// itself in the title for a few seconds (the log keeps a record too).
-	if a.scrollHintName == sess.Name && time.Now().Before(a.scrollHintUntil) {
+	// Dashboard only — the fullscreen frame title carries the session name.
+	if !a.fullscreen.IsActive() && a.scrollHintName == sess.Name && time.Now().Before(a.scrollHintUntil) {
 		v.Title = " " + scrollHintText + " "
 	}
 
@@ -84,7 +85,7 @@ func (a *App) renderPreview(v *gocui.View) {
 		cursorSnapshot := a.cursor
 		go func() {
 			result, err := a.svc.Capture(context.Background(), name, previewW, previewH)
-			a.renderPreviewCapture(name, cursorSnapshot, previewW, previewH, result, err)
+			a.renderPreviewCapture(name, cursorSnapshot, result, err)
 		}()
 	}
 
@@ -107,14 +108,14 @@ func (a *App) renderPreview(v *gocui.View) {
 // cache and feeds the session's synthetic scrollback buffer. Split out from
 // the fetch goroutine so tests can drive it directly (headless mode never
 // runs gui.Update).
-func (a *App) renderPreviewCapture(name string, cursorSnapshot, previewW, previewH int, result session.Preview, err error) {
+func (a *App) renderPreviewCapture(name string, cursorSnapshot int, result session.Preview, err error) {
 	a.preview.Lock()
 	if err == nil {
 		a.preview.Update(name, result.Content, cursorSnapshot, result.CursorX, result.CursorY)
 	} else {
 		// Failed capture (e.g. session died between refresh cycles) —
 		// mark fetched so we don't retry on every render.
-		a.preview.MarkFetched(cursorSnapshot)
+		a.preview.MarkFetched(name, cursorSnapshot)
 	}
 	a.preview.Unlock()
 	a.feedBuffer(name, result.Full)

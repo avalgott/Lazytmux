@@ -1369,7 +1369,7 @@ func TestCaptureCompletionFeedsBuffer(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.cursor = 0
 
-	app.renderPreviewCapture("devbox", 0, 80, 24, session.Preview{Content: "live", Full: "live\nstreamed"}, nil)
+	app.renderPreviewCapture("devbox", 0, session.Preview{Content: "live", Full: "live\nstreamed"}, nil)
 
 	assert.Equal(t, []string{"live", "streamed"}, app.bufferFor("devbox").Snapshot())
 }
@@ -1498,7 +1498,7 @@ func TestStaleCaptureForOldSessionNotRendered(t *testing.T) {
 	app.cursor = 0
 
 	// A capture for session-A (index 0) completes...
-	app.renderPreviewCapture("session-A", 0, 80, 24, p.captured, nil)
+	app.renderPreviewCapture("session-A", 0, p.captured, nil)
 
 	// ...after the list changed so index 0 now holds session-B.
 	app.sessions = []session.Info{{Name: "session-B"}}
@@ -1544,4 +1544,79 @@ func TestWheelDownExitsWhileLoading(t *testing.T) {
 
 	require.NoError(t, app.wheelHandler(3)(app.g, nil))
 	assert.False(t, app.previewScroll.IsActive(), "wheel-down reaching the bottom exits even while loading")
+}
+
+// --- Deep-review fixes ---
+
+func TestFailedCaptureRecordsSessionName(t *testing.T) {
+	p := &fakeProvider{err: assert.AnError}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+
+	app.renderPreviewCapture("devbox", 0, session.Preview{}, p.err)
+	app.preview.Lock()
+	name := app.preview.Name()
+	app.preview.Unlock()
+	assert.Equal(t, "devbox", name, "a failed capture must record the session name so needFetch is throttled")
+}
+
+func TestScrollHintDoesNotHijackFullscreenTitle(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+	app.scrollHintName = "devbox"
+	app.scrollHintUntil = time.Now().Add(time.Minute)
+	app.fullscreen.Enter("devbox")
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.Contains(t, v.Title, "devbox")
+	assert.NotContains(t, v.Title, "Hit Enter", "the dashboard hint must not leak into the fullscreen title")
+}
+
+func TestEnterFullScreenClearsScrollHint(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+	app.scrollHintName = "devbox"
+	app.scrollHintUntil = time.Now().Add(time.Minute)
+
+	app.enterFullScreen()
+	assert.Equal(t, "", app.scrollHintName, "entering fullscreen clears the dashboard scroll hint")
+}
+
+func TestFullscreenWheelDownAtBottomDoesNothing(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	require.NoError(t, app.wheelHandler(3)(app.g, nil))
+	assert.False(t, app.scroll.IsActive(), "wheel-down at the live bottom must not start a whole-history load")
+}
+
+func TestTabExitsPreviewScroll(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	app.focusMain = true
+
+	require.NoError(t, app.cycleFocusHandler(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive(), "Tab focus change returns the preview to the live capture")
+	assert.Equal(t, "", app.previewScrollTarget)
+}
+
+func TestWheelUpSkippedWhileHintActive(t *testing.T) {
+	p := &fakeProvider{paneHeight: 5}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+	app.scrollHintName = "devbox"
+	app.scrollHintUntil = time.Now().Add(time.Minute)
+
+	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive(), "no expensive re-load while the no-scrollback hint is showing")
 }
