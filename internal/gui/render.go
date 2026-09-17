@@ -48,7 +48,7 @@ func (a *App) renderPreview(v *gocui.View) {
 	// A recent scroll attempt on a session without scrollback explains
 	// itself in the title for a few seconds (the log keeps a record too).
 	// Dashboard only — the fullscreen frame title carries the session name.
-	if !a.fullscreen.IsActive() && a.scrollHintName == sess.Name && time.Now().Before(a.scrollHintUntil) {
+	if !a.fullscreen.IsActive() && a.scrollHintName == sess.Name && a.scrollHintID == sess.ID && time.Now().Before(a.scrollHintUntil) {
 		v.Title = " " + scrollHintText + " "
 	}
 
@@ -71,10 +71,11 @@ func (a *App) renderPreview(v *gocui.View) {
 	a.preview.Lock()
 	cache := a.preview.Content()
 	cacheName := a.preview.Name()
+	cacheGen := a.preview.Gen()
 	cachedCursor := a.preview.Cursor()
 	paneCursorX := a.preview.CursorX()
 	paneCursorY := a.preview.CursorY()
-	needFetch := !a.preview.Busy() && (cacheName != sess.Name || cachedCursor != a.cursor || a.preview.Stale(staleAfter))
+	needFetch := !a.preview.Busy() && (cacheName != sess.Name || cachedCursor != a.cursor || a.preview.Stale(staleAfter) || cacheGen != a.sessionGen.Load())
 	if needFetch {
 		a.preview.SetBusy(true)
 	}
@@ -90,7 +91,7 @@ func (a *App) renderPreview(v *gocui.View) {
 		}()
 	}
 
-	if cache != "" && cacheName == sess.Name && cachedCursor == a.cursor {
+	if cache != "" && cacheName == sess.Name && cachedCursor == a.cursor && cacheGen == a.sessionGen.Load() {
 		fmt.Fprint(v, cache)
 		v.SetCursor(clampInt(paneCursorX, 0, previewW-1), clampInt(paneCursorY, 0, previewH-1))
 		return
@@ -128,7 +129,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 		return
 	}
 	if err == nil {
-		a.preview.Update(name, result.Content, cursorSnapshot, result.CursorX, result.CursorY)
+		a.preview.Update(name, result.Content, gen, cursorSnapshot, result.CursorX, result.CursorY)
 	} else {
 		// Failed capture (e.g. session died between refresh cycles) —
 		// mark fetched so we don't retry on every render.

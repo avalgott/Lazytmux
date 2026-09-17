@@ -1748,7 +1748,7 @@ func TestFullscreenWheelFallsBackWithoutSGRMouse(t *testing.T) {
 func TestMarkFetchedClearsForeignContent(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.preview.Lock()
-	app.preview.Update("session-A", "A-CONTENT", 0, 0, 0)
+	app.preview.Update("session-A", "A-CONTENT", 0, 0, 0, 0)
 	app.preview.MarkFetched("session-B", 0)
 	assert.Equal(t, "", app.preview.Content(), "a failed fetch for another session must not retag the old content")
 	app.preview.Unlock()
@@ -1757,7 +1757,7 @@ func TestMarkFetchedClearsForeignContent(t *testing.T) {
 func TestMarkFetchedKeepsOwnContent(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.preview.Lock()
-	app.preview.Update("session-A", "A-CONTENT", 0, 0, 0)
+	app.preview.Update("session-A", "A-CONTENT", 0, 0, 0, 0)
 	app.preview.MarkFetched("session-A", 0)
 	assert.Equal(t, "A-CONTENT", app.preview.Content(), "a failed fetch for the same session keeps the cached content")
 	app.preview.Unlock()
@@ -1805,4 +1805,49 @@ func TestSessionGenStableAcrossIdenticalRefreshes(t *testing.T) {
 
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2"}}, nil)
 	assert.NotEqual(t, gen, app.sessionGen.Load(), "a recreated session (new ID) invalidates in-flight captures")
+}
+
+// --- Copilot round-7 fixes: identity-bound state and shrink handling ---
+
+func TestStaleGenCacheNotRendered(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
+	app.cursor = 0
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "OLD-SCREEN", Full: "OLD-SCREEN"}, nil)
+
+	// The session is recreated; the cached entry belongs to the old world.
+	app.sessionGen.Add(1)
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.NotContains(t, v.Buffer(), "OLD-SCREEN", "a cache entry from a previous generation must not render")
+}
+
+func TestScrollHintBoundToSessionID(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$2"}}
+	app.cursor = 0
+	app.scrollHintName = "devbox"
+	app.scrollHintID = "$1" // the hint belongs to the previous incarnation
+	app.scrollHintUntil = time.Now().Add(time.Minute)
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.NotContains(t, v.Title, "Hit Enter", "a recreated session must not inherit the old scroll hint")
+}
+
+func TestPreviewScrollExitsWhenSessionIDChanges(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScrollTargetID = "$1"
+	app.previewScroll.Enter(10, 78)
+
+	// Same name, recreated session: the frozen snapshot belongs to the dead
+	// pane and must be dropped.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2"}}, nil)
+	assert.False(t, app.previewScroll.IsActive(), "a recreated session must not keep browsing the dead snapshot")
+	assert.Equal(t, "", app.previewScrollTarget)
+	assert.Equal(t, "", app.previewScrollTargetID)
 }

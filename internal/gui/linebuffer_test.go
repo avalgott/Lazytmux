@@ -204,3 +204,19 @@ func TestSnapshotWithHeightIsConsistentUnderFeeds(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestLineBufferShrinkReplacesOldScreen(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b", "c", "d"))
+	// The pane shrinks to two rows: the old 4-row screen region is replaced,
+	// not tail-joined into a duplicate.
+	b.Feed(screen("a", "b"))
+	assert.Equal(t, []string{"a", "b"}, b.Snapshot(), "shrinkage must not manufacture duplicate history")
+
+	// With accumulated history, the history prefix survives the shrink.
+	b2 := NewLineBuffer(100)
+	b2.Feed(screen("s1", "s2", "s3", "s4"))
+	b2.Feed(screen("s2", "s3", "s4", "s5"))
+	b2.Feed(screen("s4", "s5"))
+	assert.Equal(t, []string{"s1", "s4", "s5"}, b2.Snapshot())
+}

@@ -381,7 +381,7 @@ func (a *App) enterPreviewScroll() {
 	}
 	// A recent no-scrollback verdict for this session is still valid: skip
 	// the expensive whole-history load while the hint is showing.
-	if a.scrollHintName == sess.Name && time.Now().Before(a.scrollHintUntil) {
+	if a.scrollHintName == sess.Name && a.scrollHintID == sess.ID && time.Now().Before(a.scrollHintUntil) {
 		return
 	}
 	v, err := a.g.View("main")
@@ -397,6 +397,7 @@ func (a *App) enterPreviewScroll() {
 		width = 1
 	}
 	a.previewScrollTarget = sess.Name
+	a.previewScrollTargetID = sess.ID
 	a.previewScroll.Enter(viewH, width)
 	a.restartPreviewScrollLoad()
 }
@@ -405,6 +406,7 @@ func (a *App) enterPreviewScroll() {
 func (a *App) exitPreviewScroll() {
 	a.previewScroll.Exit()
 	a.previewScrollTarget = ""
+	a.previewScrollTargetID = ""
 	a.preview.Invalidate()
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }
@@ -440,7 +442,13 @@ func (a *App) applyPreviewScrollLoad(seq int64, lines []string, paneH int, loadE
 		name := a.previewScrollTarget
 		// The session's program keeps its own scrollback: it can only be
 		// scrolled from inside the session, where the wheel is forwarded.
+		// The hint is bound to the session ID so a same-name recreation
+		// cannot inherit a stale verdict.
 		a.scrollHintName = name
+		a.scrollHintID = ""
+		if sess := a.currentSession(); sess != nil && sess.Name == name {
+			a.scrollHintID = sess.ID
+		}
 		a.scrollHintUntil = time.Now().Add(scrollHintDuration)
 		a.setStatus(scrollHintText)
 		a.exitPreviewScroll()

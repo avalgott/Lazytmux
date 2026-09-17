@@ -73,6 +73,7 @@ func (b *LineBuffer) update(scr []string) []string {
 		scr = scr[:len(scr)-1]
 	}
 	n := len(scr)
+	prev := b.screenH
 	b.screenH = n
 	if len(b.lines) == 0 {
 		return capLines(scr, b.cap)
@@ -95,11 +96,12 @@ func (b *LineBuffer) update(scr []string) []string {
 			return capLines(append(append([]string(nil), added...), b.lines...), b.cap)
 		}
 	}
-	// In-place edit or full redraw: replace the tail window.
-	if len(b.lines) >= n {
-		return capLines(append(append([]string(nil), b.lines[:len(b.lines)-n]...), scr...), b.cap)
+	// In-place edit, full redraw, or a resized pane: replace the PREVIOUS
+	// screen region (its height, not the new one — a shrunk pane must not
+	// leave the old screen's tail behind as fake history).
+	if len(b.lines) >= prev {
+		return capLines(append(append([]string(nil), b.lines[:len(b.lines)-prev]...), scr...), b.cap)
 	}
-	// Buffer shorter than the screen: extend without duplicating the overlap.
 	if m := len(b.lines); m > 0 && slices.Equal(b.lines, scr[:m]) {
 		return capLines(append(b.lines, scr[m:]...), b.cap)
 	}

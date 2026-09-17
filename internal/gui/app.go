@@ -58,10 +58,11 @@ type App struct {
 	// Dashboard preview scrolling: a second ScrollState instance (same frozen
 	// snapshot model as fullscreen scroll mode) plus the session it belongs
 	// to and the Tab-focus state.
-	previewScroll       *ScrollState
-	previewScrollTarget string
-	focusMain           bool // dashboard focus: true = main preview panel, false = sessions
-	dialog              DialogKind
+	previewScroll         *ScrollState
+	previewScrollTarget   string
+	previewScrollTargetID string // tmux ID of the session the snapshot belongs to
+	focusMain             bool   // dashboard focus: true = main preview panel, false = sessions
+	dialog                DialogKind
 	// createField is the active input field of the create dialog
 	// (0=name, 1=directory, 2=command).
 	createField    int
@@ -90,6 +91,7 @@ type App struct {
 	// attempt on a session that keeps its own scrollback (alternate-screen
 	// programs like Claude Code): "press Enter to open it and scroll inside".
 	scrollHintName  string
+	scrollHintID    string // tmux ID the hint belongs to (same-name recreations must not inherit it)
 	scrollHintUntil time.Time
 }
 
@@ -330,13 +332,14 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 	// live capture. A name comparison keeps this a no-op during the regular
 	// 300ms refresh ticks while browsing.
 	if a.previewScroll.IsActive() {
-		cur := ""
+		cur, curID := "", ""
 		if sess := a.currentSession(); sess != nil {
-			cur = sess.Name
+			cur, curID = sess.Name, sess.ID
 		}
-		if cur != a.previewScrollTarget {
+		if cur != a.previewScrollTarget || curID != a.previewScrollTargetID {
 			a.previewScroll.Exit()
 			a.previewScrollTarget = ""
+			a.previewScrollTargetID = ""
 			a.preview.Invalidate()
 		}
 	}
@@ -352,8 +355,10 @@ func (a *App) enterFullScreen() {
 	a.scroll.Exit()
 	a.previewScroll.Exit()
 	a.previewScrollTarget = ""
+	a.previewScrollTargetID = ""
 	a.fullscreenNoScrollback = false
 	a.scrollHintName = ""
+	a.scrollHintID = ""
 	a.scrollHintUntil = time.Time{}
 	a.preview.Invalidate()
 	a.fullscreen.Enter(sess.Name)
@@ -403,6 +408,7 @@ func (a *App) moveCursor(delta int) {
 	if a.cursor != before && a.previewScroll.IsActive() {
 		a.previewScroll.Exit()
 		a.previewScrollTarget = ""
+		a.previewScrollTargetID = ""
 	}
 	a.preview.Invalidate()
 }
