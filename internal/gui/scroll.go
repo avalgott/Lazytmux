@@ -403,9 +403,20 @@ func (a *App) enterPreviewScroll() {
 	if sess == nil {
 		return
 	}
-	// A recent no-scrollback verdict for this session is still valid: skip
-	// the expensive whole-history load while the hint is showing.
-	if a.scrollHintIdent != "" && a.scrollHintName == sess.Name && a.scrollHintIdent == sessionIdentity(*sess) && time.Now().Before(a.scrollHintUntil) {
+	// A recent no-scrollback verdict for this session suppresses the
+	// expensive whole-history load while the hint is showing — but only
+	// while the buffer is still empty. Live captures keep feeding it, and
+	// the program may have started streaming within the hint window.
+	skip := a.scrollHintIdent != "" && a.scrollHintName == sess.Name &&
+		a.scrollHintIdent == sessionIdentity(*sess) && time.Now().Before(a.scrollHintUntil)
+	if skip {
+		if b := a.bufferLookup(sess.Name); b != nil {
+			if snap, h := b.SnapshotWithHeight(); len(snap) > h {
+				skip = false // the buffer gained history: browse it
+			}
+		}
+	}
+	if skip {
 		return
 	}
 	v, err := a.g.View("main")
