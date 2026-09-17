@@ -89,9 +89,10 @@ func (a *App) renderPreview(v *gocui.View) {
 		name := sess.Name
 		cursorSnapshot := a.cursor
 		gen := a.sessionGen.Load()
+		cs := a.captureSeq.Add(1)
 		go func() {
 			result, err := a.svc.Capture(context.Background(), name, previewW, previewH)
-			a.renderPreviewCapture(name, cursorSnapshot, gen, result, err)
+			a.renderPreviewCapture(name, cursorSnapshot, gen, cs, result, err)
 		}()
 	}
 
@@ -119,7 +120,7 @@ func (a *App) renderPreview(v *gocui.View) {
 // The feed is gated on the session generation recorded when the capture
 // started: a refresh in between means the session may have vanished (or its
 // name been reused), so the stale completion must not feed history.
-func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, result session.Preview, err error) {
+func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, cs uint64, result session.Preview, err error) {
 	// The generation check and the pane recording are atomic under fsMu —
 	// the refresh (which prunes pane metadata) holds the same lock, so a
 	// stale capture cannot repopulate paneIDs for a removed session. Failed
@@ -128,7 +129,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 	genOK := a.sessionGen.Load() == gen
 	var paneChanged bool
 	if genOK && err == nil {
-		paneChanged = a.recordPaneLocked(name, result.PaneID)
+		paneChanged = a.recordPaneLocked(name, result.PaneID, cs)
 	}
 	a.fsMu.Unlock()
 	a.preview.Lock()
@@ -165,19 +166,25 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 // Returns true when the active pane changed (the previous pane's buffer is
 // dropped). The caller holds fsMu; buffersMu is taken inside — the same
 // order the refresh uses.
-func (a *App) recordPaneLocked(name, paneID string) (changed bool) {
+func (a *App) recordPaneLocked(name, paneID string, cs uint64) (changed bool) {
 	if paneID == "" {
 		return false
 	}
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
 	if a.paneIDs[name] != "" && a.paneIDs[name] != paneID {
+		// A capture that started BEFORE the one that recorded the current
+		// binding is stale: its pane must not overwrite the newer binding.
+		if cs < a.paneSeq[name] {
+			return false
+		}
 		changed = true
 		delete(a.buffers, name)
 		delete(a.bufferIDs, name)
 		delete(a.bufferGens, name)
 	}
 	a.paneIDs[name] = paneID
+	a.paneSeq[name] = cs
 	return changed
 }
 

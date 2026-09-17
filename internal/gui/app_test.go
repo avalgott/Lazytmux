@@ -1404,7 +1404,7 @@ func TestCaptureCompletionFeedsBuffer(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.cursor = 0
 
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "live", Full: "live\nstreamed"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "live", Full: "live\nstreamed"}, nil)
 
 	assert.Equal(t, []string{"live", "streamed"}, app.bufferFor("devbox").Snapshot())
 }
@@ -1545,7 +1545,7 @@ func TestStaleCaptureForOldSessionNotRendered(t *testing.T) {
 	app.cursor = 0
 
 	// A capture for session-A (index 0) completes...
-	app.renderPreviewCapture("session-A", 0, app.sessionGen.Load(), p.captured, nil)
+	app.renderPreviewCapture("session-A", 0, app.sessionGen.Load(), 0, p.captured, nil)
 
 	// ...after the list changed so index 0 now holds session-B.
 	app.sessions = []session.Info{{Name: "session-B"}}
@@ -1601,7 +1601,7 @@ func TestFailedCaptureRecordsSessionName(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.cursor = 0
 
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{}, p.err)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{}, p.err)
 	app.preview.Lock()
 	name := app.preview.Name()
 	app.preview.Unlock()
@@ -1717,7 +1717,7 @@ func TestStaleCaptureDoesNotFeedBuffer(t *testing.T) {
 	// The capture started before a session refresh changed the world.
 	gen := app.sessionGen.Load()
 	app.sessionGen.Add(1)
-	app.renderPreviewCapture("gone", 0, gen, session.Preview{Full: "stale"}, nil)
+	app.renderPreviewCapture("gone", 0, gen, 0, session.Preview{Full: "stale"}, nil)
 	assert.Nil(t, app.bufferLookup("gone"), "a stale capture must not recreate a vanished session's buffer")
 }
 
@@ -1815,7 +1815,7 @@ func TestStaleGenerationDoesNotInstallResult(t *testing.T) {
 	gen := app.sessionGen.Load()
 	app.sessionGen.Add(1) // a refresh happened while the capture was in flight
 
-	app.renderPreviewCapture("devbox", 0, gen, session.Preview{Content: "STALE", Full: "STALE"}, nil)
+	app.renderPreviewCapture("devbox", 0, gen, 0, session.Preview{Content: "STALE", Full: "STALE"}, nil)
 	app.preview.Lock()
 	content := app.preview.Content()
 	app.preview.Unlock()
@@ -1860,7 +1860,7 @@ func TestStaleGenCacheNotRendered(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
 	app.cursor = 0
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "OLD-SCREEN", Full: "OLD-SCREEN"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "OLD-SCREEN", Full: "OLD-SCREEN"}, nil)
 
 	// The session is recreated; the cached entry belongs to the old world.
 	app.sessionGen.Add(1)
@@ -2612,8 +2612,8 @@ func TestBufferResetOnActivePaneChange(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
 	app.cursor = 0
 
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P1", Full: "pane-one-content", PaneID: "%1"}, nil)
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P2", Full: "pane-two-content", PaneID: "%2"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P1", Full: "pane-one-content", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P2", Full: "pane-two-content", PaneID: "%2"}, nil)
 
 	snap := app.bufferFor("devbox").Snapshot()
 	assert.Equal(t, []string{"pane-two-content"}, snap, "the active pane changed: the old pane's buffer must be dropped")
@@ -2626,7 +2626,7 @@ func TestWheelForwardIgnoredOnPaneChange(t *testing.T) {
 	app.fullscreen.Enter("devbox")
 
 	// The user was looking at pane %1; the active pane is now %2.
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P1", Full: "P1", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P1", Full: "P1", PaneID: "%1"}, nil)
 
 	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), app.wheelGen.Load(), app.sessionGen.Load(), -3, 0, 0, false)
 	require.NoError(t, err)
@@ -2652,7 +2652,7 @@ func TestWheelForwardTargetsReturnedPane(t *testing.T) {
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
 	app.fullscreen.Enter("devbox")
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%5"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P", Full: "P", PaneID: "%5"}, nil)
 
 	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), app.wheelGen.Load(), app.sessionGen.Load(), -3, 0, 0, false)
 	require.NoError(t, err)
@@ -2669,7 +2669,7 @@ func TestStaleCaptureDoesNotRecordPane(t *testing.T) {
 	gen := app.sessionGen.Load()
 	app.sessionGen.Add(1) // the session changed while the capture was in flight
 
-	app.renderPreviewCapture("devbox", 0, gen, session.Preview{Content: "P", Full: "P", PaneID: "%9"}, nil)
+	app.renderPreviewCapture("devbox", 0, gen, 0, session.Preview{Content: "P", Full: "P", PaneID: "%9"}, nil)
 	app.buffersMu.Lock()
 	_, recorded := app.paneIDs["devbox"]
 	app.buffersMu.Unlock()
@@ -2684,7 +2684,7 @@ func TestScrollSnapshotBufferUsedOnlyForMatchingPane(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
 	app.cursor = 0
 	// Record pane %1 as the live pane and accumulate history.
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
 	app.feedBuffer("devbox", "h1\nh2\nh3\nh4\nh5\nh6\nh7")
 	app.feedBuffer("devbox", "h2\nh3\nh4\nh5\nh6\nh7\nh8")
 
@@ -2707,7 +2707,7 @@ func TestPaneSwitchBeforeScrollingRebindsAndApplies(t *testing.T) {
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
 	app.cursor = 0
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
 
 	app.previewScrollTarget = "devbox"
 	app.previewScroll.Enter(20, 78)
@@ -2727,10 +2727,10 @@ func TestStalePreviewLoadDoesNotRebindPane(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}, {Name: "other", ID: "$2", Created: 100}}
 	app.cursor = 0
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
 
 	// The new target has its own recorded pane and a buffer.
-	app.renderPreviewCapture("other", 0, app.sessionGen.Load(), session.Preview{Content: "O", Full: "O", PaneID: "%2"}, nil)
+	app.renderPreviewCapture("other", 0, app.sessionGen.Load(), 0, session.Preview{Content: "O", Full: "O", PaneID: "%2"}, nil)
 	app.feedBuffer("other", "other-history")
 
 	// Enter and exit scrolling, then re-enter for another session.
@@ -2771,7 +2771,7 @@ func TestFullscreenScrollExitsOnTargetRecreation(t *testing.T) {
 func TestPaneIDsPrunedOnIdentityChange(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}}, nil)
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
 
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2", Created: 200}}, nil)
 	app.buffersMu.Lock()
@@ -2783,7 +2783,7 @@ func TestPaneIDsPrunedOnIdentityChange(t *testing.T) {
 func TestAdoptPaneDoesNotOverwriteNewerBinding(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%2"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P", Full: "P", PaneID: "%2"}, nil)
 
 	// A live capture recorded a NEWER pane after the scroll fetch.
 	app.adoptPaneIfStale("devbox", "%2", "%9")
@@ -2792,7 +2792,7 @@ func TestAdoptPaneDoesNotOverwriteNewerBinding(t *testing.T) {
 	app.buffersMu.Unlock()
 	assert.Equal(t, "%9", recorded, "the fetch-time binding adopts the snapshot's pane")
 
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "Q", Full: "Q", PaneID: "%3"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "Q", Full: "Q", PaneID: "%3"}, nil)
 	app.adoptPaneIfStale("devbox", "%2", "%9")
 	app.buffersMu.Lock()
 	recorded = app.paneIDs["devbox"]
@@ -2806,7 +2806,7 @@ func TestStalePaneCacheNotRendered(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
 	app.cursor = 0
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "OLD-PANE-SCREEN", Full: "P", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "OLD-PANE-SCREEN", Full: "P", PaneID: "%1"}, nil)
 
 	// The active pane changed after the cache was populated.
 	app.buffersMu.Lock()
@@ -2822,13 +2822,13 @@ func TestStalePaneCacheNotRendered(t *testing.T) {
 func TestStalePaneFeedSkipped(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
 
 	// The active pane changed; the in-flight capture for the old pane lands.
 	app.buffersMu.Lock()
 	app.paneIDs["devbox"] = "%2"
 	app.buffersMu.Unlock()
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "Q", Full: "old-pane-history", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "Q", Full: "old-pane-history", PaneID: "%1"}, nil)
 
 	assert.Nil(t, app.bufferLookup("devbox"), "the old pane's feed must not create a buffer under the new pane")
 }

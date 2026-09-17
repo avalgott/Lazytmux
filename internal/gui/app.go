@@ -93,10 +93,12 @@ type App struct {
 	bufferIDs              map[string]string // buffer name -> "ID@Created@PID" identity it belongs to
 	bufferIdentities       map[string]string // buffer name -> the session identity it was fed under
 	paneIDs                map[string]string // session name -> the active pane the buffer/preview belong to
+	paneSeq                map[string]uint64 // session -> the capture sequence that last recorded its pane
 	sessionIdentities      map[string]string // session name -> identity, updated every refresh
 	bufferGens             map[string]uint64 // generation the buffer was last fed under
 	buffersMu              sync.Mutex        // guards the buffers map (LineBuffer locks itself)
 	sessionGen             atomic.Uint64
+	captureSeq             atomic.Uint64 // monotonically increasing capture identity
 	lastSessionSig         string        // name=ID signature of the last applied refresh
 	quitting               atomic.Bool   // set when the main loop exits; the wheel worker drops leftovers
 	quitCh                 chan struct{} // closed when the main loop exits; unblocks waiting workers
@@ -160,6 +162,7 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 		bufferGens:        make(map[string]uint64),
 		bufferIdentities:  make(map[string]string),
 		paneIDs:           make(map[string]string),
+		paneSeq:           make(map[string]uint64),
 		sessionIdentities: make(map[string]string),
 		wheelQueue:        make(chan wheelTask, 64),
 		quitCh:            make(chan struct{}),
@@ -360,6 +363,7 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 					delete(a.bufferGens, name)
 					delete(a.bufferIdentities, name)
 					delete(a.paneIDs, name)
+					delete(a.paneSeq, name)
 				} else {
 					a.bufferIDs[name] = identity
 				}
@@ -372,6 +376,7 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 			delete(a.bufferGens, name)
 			delete(a.bufferIdentities, name)
 			delete(a.paneIDs, name)
+			delete(a.paneSeq, name)
 		}
 	}
 	// Pane metadata prunes independently of buffers: a recreated session
@@ -385,12 +390,14 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 				found = true
 				if a.sessionIdentities[name] != "" && a.sessionIdentities[name] != sessionIdentity(s) {
 					delete(a.paneIDs, name)
+					delete(a.paneSeq, name)
 				}
 				break
 			}
 		}
 		if !found {
 			delete(a.paneIDs, name)
+			delete(a.paneSeq, name)
 		}
 	}
 	// Record every live session's identity, so feeds can bind themselves to
