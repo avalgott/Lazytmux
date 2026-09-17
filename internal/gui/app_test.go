@@ -1791,3 +1791,18 @@ func TestBufferResetWhenSessionIdentityChanges(t *testing.T) {
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2"}}, nil)
 	assert.Nil(t, app.bufferLookup("devbox"), "a recreated session must start with a fresh buffer")
 }
+
+// --- Copilot round-7 fix: generation advances only on identity change ---
+
+func TestSessionGenStableAcrossIdenticalRefreshes(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	list := []session.Info{{Name: "devbox", ID: "$1"}}
+
+	app.applySessionRefresh(list, nil)
+	gen := app.sessionGen.Load()
+	app.applySessionRefresh(list, nil)
+	assert.Equal(t, gen, app.sessionGen.Load(), "an unchanged session list must not invalidate in-flight captures")
+
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2"}}, nil)
+	assert.NotEqual(t, gen, app.sessionGen.Load(), "a recreated session (new ID) invalidates in-flight captures")
+}

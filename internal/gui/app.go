@@ -84,6 +84,7 @@ type App struct {
 	bufferIDs              map[string]string // buffer name -> tmux session ID it belongs to
 	buffersMu              sync.Mutex        // guards the buffers map (LineBuffer locks itself)
 	sessionGen             atomic.Uint64
+	lastSessionSig         string // name=ID signature of the last applied refresh
 
 	// scrollHint is the transient preview-title hint shown after a scroll
 	// attempt on a session that keeps its own scrollback (alternate-screen
@@ -274,7 +275,13 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 	// killed and recreated under the same name between refreshes gets a
 	// fresh buffer instead of inheriting the old pane's scrollback.
 	a.buffersMu.Lock()
-	a.sessionGen.Add(1)
+	// Invalidate in-flight captures only when the session identity landscape
+	// changed — an ordinary poll must not starve captures that run longer
+	// than one refresh interval on a slow tmux server.
+	if sig := sessionListSig(sessions); sig != a.lastSessionSig {
+		a.lastSessionSig = sig
+		a.sessionGen.Add(1)
+	}
 	for name := range a.buffers {
 		found := false
 		for _, s := range a.sessions {
@@ -479,6 +486,22 @@ func (a *App) bufferLookup(name string) *LineBuffer {
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
 	return a.buffers[name]
+}
+
+// sessionListSig is a cheap identity signature of the session list: the
+// name=ID pairs joined in list order (the service sorts by name, so the
+// order is stable). It changes exactly when a session appears, disappears,
+// is renamed, or is recreated — the events that invalidate in-flight
+// captures.
+func sessionListSig(sessions []session.Info) string {
+	var sb strings.Builder
+	for _, s := range sessions {
+		sb.WriteString(s.Name)
+		sb.WriteByte('=')
+		sb.WriteString(s.ID)
+		sb.WriteByte(';')
+	}
+	return sb.String()
 }
 
 // appendLog adds an entry to the log, trimming the oldest entries when the
