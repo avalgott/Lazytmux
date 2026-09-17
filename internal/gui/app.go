@@ -555,12 +555,15 @@ func sessionIdentity(s session.Info) string {
 }
 
 // sessionListSig is a cheap identity signature of the session list: the
-// identities joined in list order (the service sorts by name, so the order
-// is stable). It changes exactly when a session appears, disappears, is
-// renamed, or is recreated — the events that invalidate in-flight captures.
+// name=identity pairs joined in list order (the service sorts by name, so
+// the order is stable). It changes exactly when a session appears,
+// disappears, is renamed, or is recreated — the events that invalidate
+// in-flight captures.
 func sessionListSig(sessions []session.Info) string {
 	var sb strings.Builder
 	for _, s := range sessions {
+		sb.WriteString(s.Name)
+		sb.WriteByte('=')
 		sb.WriteString(sessionIdentity(s))
 		sb.WriteByte(';')
 	}

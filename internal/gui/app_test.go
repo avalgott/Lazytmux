@@ -2456,3 +2456,15 @@ func TestMarkFetchedClearsForeignGeneration(t *testing.T) {
 	assert.Equal(t, "", app.preview.Content(), "a generation change is a different session incarnation")
 	app.preview.Unlock()
 }
+
+// --- Copilot round-24 fix: renames must invalidate ---
+
+func TestSessionGenAdvancesOnRename(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}}, nil)
+	gen := app.sessionGen.Load()
+
+	// Same ID, creation time, and server: only the name changed.
+	app.applySessionRefresh([]session.Info{{Name: "devbox2", ID: "$1", Created: 100}}, nil)
+	assert.NotEqual(t, gen, app.sessionGen.Load(), "a rename must invalidate in-flight captures")
+}
