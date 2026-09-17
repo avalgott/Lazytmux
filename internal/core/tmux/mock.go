@@ -25,6 +25,7 @@ type MockClient struct {
 	Options       map[string]string
 	Messages      map[string]string
 	PaneHeight    int          // returned by CapturePaneANSIHistory
+	PaneID        string       // returned by CapturePaneANSIWithCursor
 	WheelEvents   []WheelEvent // recorded SendMouseWheel calls
 
 	// Infos are the tmux sessions returned by ListSessions (name -> info).
@@ -216,9 +217,9 @@ func (m *MockClient) CapturePaneANSI(_ context.Context, target string) (string, 
 	return m.Captured[target], nil
 }
 
-func (m *MockClient) CapturePaneANSIWithCursor(_ context.Context, target string) (string, int, int, error) {
+func (m *MockClient) CapturePaneANSIWithCursor(_ context.Context, target string) (string, int, int, string, error) {
 	if m.ErrCapture != nil {
-		return "", 0, 0, m.ErrCapture
+		return "", 0, 0, "", m.ErrCapture
 	}
 	cursorX, cursorY := 0, 0
 	if pos := m.Messages[target]; pos != "" {
@@ -228,7 +229,7 @@ func (m *MockClient) CapturePaneANSIWithCursor(_ context.Context, target string)
 			cursorY, _ = strconv.Atoi(parts[1])
 		}
 	}
-	return m.Captured[target], cursorX, cursorY, nil
+	return m.Captured[target], cursorX, cursorY, m.PaneID, nil
 }
 
 func (m *MockClient) CapturePaneANSIHistory(_ context.Context, target string) (string, int, error) {
@@ -241,13 +242,13 @@ func (m *MockClient) CapturePaneANSIHistory(_ context.Context, target string) (s
 	return m.Captured[target], m.PaneHeight, nil
 }
 
-func (m *MockClient) PaneInputFlags(_ context.Context, target string) (bool, bool, int, int, error) {
+func (m *MockClient) PaneInputFlags(_ context.Context, target string) (bool, bool, int, int, string, error) {
 	if m.ErrShowMessage != nil {
-		return false, false, 0, 0, m.ErrShowMessage
+		return false, false, 0, 0, "", m.ErrShowMessage
 	}
 	flags := m.Messages[target+"#flags"]
 	if flags == "" {
-		return false, false, 0, 0, nil
+		return false, false, 0, 0, "", nil
 	}
 	return parseInputFlags(flags)
 }

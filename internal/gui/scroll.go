@@ -489,7 +489,7 @@ func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, lines []string, pan
 		// switched sessions while the query was in flight).
 		seq := a.previewScroll.seq
 		go func() {
-			alt, sgr, _, _, ferr := a.svc.PaneInputFlags(context.Background(), name)
+			alt, sgr, _, _, _, ferr := a.svc.PaneInputFlags(context.Background(), name)
 			a.g.Update(func(*gocui.Gui) error {
 				if a.noHistoryHintCurrent(name, seq) {
 					a.applyNoHistoryHint(name, alt, sgr, ferr != nil)

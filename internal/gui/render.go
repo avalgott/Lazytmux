@@ -115,7 +115,14 @@ func (a *App) renderPreview(v *gocui.View) {
 // started: a refresh in between means the session may have vanished (or its
 // name been reused), so the stale completion must not feed history.
 func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, result session.Preview, err error) {
+	// The active pane of a session can change (pane switch, respawn): the
+	// synthetic buffer and the cached screen belong to a specific pane, so
+	// a change resets them before the new pane's content lands.
+	paneChanged := a.recordPane(name, result.PaneID)
 	a.preview.Lock()
+	if paneChanged {
+		a.preview.ClearContent()
+	}
 	if a.sessionGen.Load() != gen {
 		// A refresh changed the session landscape while this capture was in
 		// flight: discard the result and the old cache alike, and let the
@@ -138,6 +145,28 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 	a.preview.Unlock()
 	a.feedBufferIfCurrent(name, gen, result.Full)
 	a.g.Update(func(*gocui.Gui) error { return nil })
+}
+
+// recordPane binds a session to the pane its capture came from. Returns
+// true when the active pane changed (the previous pane's buffer is dropped).
+// Serialized with the wheel forward via fsMu, so a pane change can never
+// race an injection into the wrong pane.
+func (a *App) recordPane(name, paneID string) (changed bool) {
+	if paneID == "" {
+		return false
+	}
+	a.fsMu.Lock()
+	defer a.fsMu.Unlock()
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	if a.paneIDs[name] != "" && a.paneIDs[name] != paneID {
+		changed = true
+		delete(a.buffers, name)
+		delete(a.bufferIDs, name)
+		delete(a.bufferGens, name)
+	}
+	a.paneIDs[name] = paneID
+	return changed
 }
 
 // renderOptionsBar draws the keybinding hints. The bar follows panel focus,

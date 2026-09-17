@@ -51,7 +51,7 @@ type Client interface {
 	// and the cursor must come from the same pane state — full-screen
 	// programs that repaint constantly (e.g. Claude Code) shift their layout
 	// between two separate calls, which puts the rendered cursor one row off.
-	CapturePaneANSIWithCursor(ctx context.Context, target string) (content string, cursorX, cursorY int, err error)
+	CapturePaneANSIWithCursor(ctx context.Context, target string) (content string, cursorX, cursorY int, paneID string, err error)
 
 	// CapturePaneANSIHistory captures the whole pane history from tmux's
 	// oldest-history sentinel ("-S -") to the current bottom in one
@@ -65,7 +65,7 @@ type Client interface {
 	// PaneInputFlags reports the pane's input mode: alternate screen active,
 	// SGR (1006) mouse tracking enabled, and the 0-based pane cursor
 	// position.
-	PaneInputFlags(ctx context.Context, target string) (altOn, mouseAny bool, cursorX, cursorY int, err error)
+	PaneInputFlags(ctx context.Context, target string) (altOn, mouseAny bool, cursorX, cursorY int, paneID string, err error)
 
 	// SendMouseWheel sends a mouse wheel event to the pane's input stream
 	// as SGR mouse escape sequences (0-based pane cursor coordinates).

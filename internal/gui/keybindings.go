@@ -463,15 +463,21 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 // event and returns the decision without touching UI state — safe to run
 // from a goroutine.
 func (a *App) decideFullscreenWheel(target string, fsGen, wGen, sGen uint64, delta, x, y int, hasPos bool) (wheelDecision, error) {
-	alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
+	alt, mouse, cx, cy, paneID, err := a.svc.PaneInputFlags(context.Background(), target)
 	if err == nil && alt && mouse {
 		// The generation checks and the send are serialized with fullscreen
 		// and scroll-mode transitions by fsMu: exit cannot race with
 		// injection, and entering scroll mode (which must suppress pane
-		// input) invalidates the pending forward.
+		// input) invalidates the pending forward. The pane the user was
+		// looking at must still be the active one — a pane switch must not
+		// receive input meant for its predecessor.
+		a.buffersMu.Lock()
+		recorded := a.paneIDs[target]
+		a.buffersMu.Unlock()
 		a.fsMu.Lock()
 		defer a.fsMu.Unlock()
-		if a.fullscreenGen.Load() != fsGen || a.wheelGen.Load() != wGen || a.sessionGen.Load() != sGen {
+		if a.fullscreenGen.Load() != fsGen || a.wheelGen.Load() != wGen || a.sessionGen.Load() != sGen ||
+			(recorded != "" && recorded != paneID) {
 			return wheelIgnored, nil
 		}
 		if hasPos {

@@ -347,12 +347,12 @@ func (c *ExecClient) CapturePaneANSI(ctx context.Context, target string) (string
 // CapturePaneANSIWithCursor captures the pane content and the cursor position
 // in a single tmux invocation (capture-pane followed by display-message in
 // the same command batch). The last line of the output is the cursor pair.
-func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target string) (string, int, int, error) {
+func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target string) (string, int, int, string, error) {
 	ctx2, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
 	args := []string{"capture-pane", "-t", target, "-ep", ";",
-		"display-message", "-t", target, "-p", "#{cursor_x},#{cursor_y}"}
+		"display-message", "-t", target, "-p", "#{cursor_x},#{cursor_y} #{pane_id}"}
 	fullArgs := c.prependSocket(args)
 	cmd := exec.CommandContext(ctx2, c.tmuxBin, fullArgs...)
 	var stderr strings.Builder
@@ -360,11 +360,11 @@ func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target strin
 	out, err := cmd.Output()
 	c.logCmd("CapturePaneANSIWithCursor", fullArgs, string(out), err)
 	if err != nil {
-		return "", 0, 0, fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
+		return "", 0, 0, "", fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
 	}
 
-	content, cursorX, cursorY := splitCursorPair(string(out))
-	return content, cursorX, cursorY, nil
+	content, cursorX, cursorY, paneID := splitCursorPair(string(out))
+	return content, cursorX, cursorY, paneID, nil
 }
 
 // splitCursorPair splits the combined output of
@@ -374,23 +374,30 @@ func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target strin
 // than trimming trailing newlines) keeps blank trailing rows — an
 // alt-screen app's cursor row — which TrimRight would destroy, wobbling the
 // row count between captures.
-func splitCursorPair(out string) (content string, cursorX, cursorY int) {
+func splitCursorPair(out string) (content string, cursorX, cursorY int, paneID string) {
 	lines := strings.Split(out, "\n")
 	// The output ends with the cursor line's newline; drop that phantom.
 	if n := len(lines); n > 0 && lines[n-1] == "" {
 		lines = lines[:n-1]
 	}
 	if n := len(lines); n > 0 {
+		// The cursor line is "x,y %N": the cursor pair plus the pane ID, so
+		// the capture and the pane it came from are one atomic observation.
 		if parts := strings.SplitN(strings.TrimSpace(lines[n-1]), ",", 2); len(parts) == 2 {
 			x, errX := strconv.Atoi(parts[0])
-			y, errY := strconv.Atoi(parts[1])
-			if errX == nil && errY == nil {
-				cursorX, cursorY = x, y
-				lines = lines[:n-1]
+			rest := strings.Fields(parts[1])
+			if len(rest) >= 1 {
+				if y, errY := strconv.Atoi(rest[0]); errX == nil && errY == nil {
+					cursorX, cursorY = x, y
+					if len(rest) >= 2 {
+						paneID = rest[1]
+					}
+					lines = lines[:n-1]
+				}
 			}
 		}
 	}
-	return strings.Join(lines, "\n"), cursorX, cursorY
+	return strings.Join(lines, "\n"), cursorX, cursorY, paneID
 }
 
 // CapturePaneANSIHistory captures from the oldest history line to the
@@ -423,11 +430,11 @@ func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) 
 // SendMouseWheel emits — and the pane cursor position (0-based). The format
 // is the positional argument, matching ShowMessage — display-message expands
 // format variables there on every tmux version.
-func (c *ExecClient) PaneInputFlags(ctx context.Context, target string) (bool, bool, int, int, error) {
+func (c *ExecClient) PaneInputFlags(ctx context.Context, target string) (bool, bool, int, int, string, error) {
 	out, err := c.run(ctx, "display-message", "-t", target, "-p",
-		"#{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{cursor_x} #{cursor_y}")
+		"#{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{cursor_x} #{cursor_y} #{pane_id}")
 	if err != nil {
-		return false, false, 0, 0, err
+		return false, false, 0, 0, "", err
 	}
 	return parseInputFlags(out)
 }
@@ -464,20 +471,20 @@ func splitPaneHeightLine(out string) (string, int, error) {
 // (1006) encoding is selected — SGR alone leaves a program that is not
 // listening for mouse events, and any other encoding would not understand
 // the SGR sequences SendMouseWheel emits.
-func parseInputFlags(s string) (altOn, mouseSGR bool, cx, cy int, err error) {
+func parseInputFlags(s string) (altOn, mouseSGR bool, cx, cy int, paneID string, err error) {
 	fields := strings.Fields(s)
-	if len(fields) != 5 {
-		return false, false, 0, 0, fmt.Errorf("unexpected input flags %q", s)
+	if len(fields) != 6 {
+		return false, false, 0, 0, "", fmt.Errorf("unexpected input flags %q", s)
 	}
 	var nums [5]int
-	for i, f := range fields {
+	for i, f := range fields[:5] {
 		n, e := strconv.Atoi(f)
 		if e != nil {
-			return false, false, 0, 0, fmt.Errorf("invalid input flags %q: %w", s, e)
+			return false, false, 0, 0, "", fmt.Errorf("invalid input flags %q: %w", s, e)
 		}
 		nums[i] = n
 	}
-	return nums[0] == 1, nums[1] == 1 && nums[2] == 1, nums[3], nums[4], nil
+	return nums[0] == 1, nums[1] == 1 && nums[2] == 1, nums[3], nums[4], fields[5], nil
 }
 
 // sgrWheel builds the SGR mouse escape sequence for one wheel step. Wheel

@@ -48,6 +48,7 @@ type Preview struct {
 	Full       string // raw full-pane capture (untruncated, unwindowed)
 	CursorX    int
 	CursorY    int
+	PaneID     string // the tmux pane the capture came from (%N)
 	PaneHeight int
 }
 
@@ -67,7 +68,7 @@ type Provider interface {
 	// position. The GUI uses it to decide whether the wheel should go to the
 	// pane's program (which handles its own scrolling) or to lazytmux scroll
 	// mode — SGR is the only wheel encoding it emits.
-	PaneInputFlags(ctx context.Context, name string) (altOn, sgrMouse bool, cursorX, cursorY int, err error)
+	PaneInputFlags(ctx context.Context, name string) (altOn, sgrMouse bool, cursorX, cursorY int, paneID string, err error)
 	// ForwardMouseWheel sends a mouse wheel event to the pane's input
 	// stream (0-based pane cursor coordinates).
 	ForwardMouseWheel(ctx context.Context, name string, up bool, cursorX, cursorY int) error
@@ -251,7 +252,7 @@ func (s *Service) Rename(ctx context.Context, name, newName string) error {
 // cursor are fetched atomically so the rendered cursor never disagrees with
 // the rendered content.
 func (s *Service) Capture(ctx context.Context, name string, width, height int) (Preview, error) {
-	content, cursorX, cursorY, err := s.tmux.CapturePaneANSIWithCursor(ctx, name)
+	content, cursorX, cursorY, paneID, err := s.tmux.CapturePaneANSIWithCursor(ctx, name)
 	if err != nil {
 		return Preview{}, err
 	}
@@ -284,6 +285,7 @@ func (s *Service) Capture(ctx context.Context, name string, width, height int) (
 		Full:    content,
 		CursorX: cursorX,
 		CursorY: cursorY,
+		PaneID:  paneID,
 	}, nil
 }
 
@@ -298,7 +300,7 @@ func (s *Service) CaptureScrollback(ctx context.Context, name string) (Preview, 
 }
 
 // PaneInputFlags reports the active pane's input mode.
-func (s *Service) PaneInputFlags(ctx context.Context, name string) (bool, bool, int, int, error) {
+func (s *Service) PaneInputFlags(ctx context.Context, name string) (bool, bool, int, int, string, error) {
 	return s.tmux.PaneInputFlags(ctx, name)
 }
 

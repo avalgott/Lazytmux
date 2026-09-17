@@ -89,7 +89,8 @@ type App struct {
 	refreshBusy            atomic.Bool // true while a background session refresh is in flight
 	attachTarget           string      // session to attach to; set on Enter, main() acts on it
 	buffers                map[string]*LineBuffer
-	bufferIDs              map[string]string // buffer name -> "ID@Created" identity it belongs to
+	bufferIDs              map[string]string // buffer name -> "ID@Created@PID" identity it belongs to
+	paneIDs                map[string]string // session name -> the active pane the buffer/preview belong to
 	bufferGens             map[string]uint64 // generation the buffer was last fed under
 	buffersMu              sync.Mutex        // guards the buffers map (LineBuffer locks itself)
 	sessionGen             atomic.Uint64
@@ -154,6 +155,7 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 		buffers:       make(map[string]*LineBuffer),
 		bufferIDs:     make(map[string]string),
 		bufferGens:    make(map[string]uint64),
+		paneIDs:       make(map[string]string),
 		wheelQueue:    make(chan wheelTask, 64),
 		quitCh:        make(chan struct{}),
 	}
@@ -299,18 +301,17 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 	// Buffers are also bound to the session's stable tmux ID: a session
 	// killed and recreated under the same name between refreshes gets a
 	// fresh buffer instead of inheriting the old pane's scrollback.
+	// Lock order is fsMu -> buffersMu everywhere; the bump is serialized
+	// with fsMu so a wheel forward (which holds fsMu across its check and
+	// the send) can never race a recreate.
+	a.fsMu.Lock()
 	a.buffersMu.Lock()
 	// Invalidate in-flight captures only when the session identity landscape
 	// changed — an ordinary poll must not starve captures that run longer
-	// than one refresh interval on a slow tmux server. The bump is
-	// serialized with fsMu: a wheel forward holds that lock across its
-	// generation check and the send, so a recreate can never land between
-	// them.
+	// than one refresh interval on a slow tmux server.
 	if sig := sessionListSig(sessions); sig != a.lastSessionSig {
 		a.lastSessionSig = sig
-		a.fsMu.Lock()
 		a.sessionGen.Add(1)
-		a.fsMu.Unlock()
 		// The per-target fullscreen caches are keyed by name: a same-name
 		// recreation must not inherit the dead pane's verdicts or skip the
 		// replacement window's resize.
@@ -349,9 +350,11 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 			delete(a.buffers, name)
 			delete(a.bufferIDs, name)
 			delete(a.bufferGens, name)
+			delete(a.paneIDs, name)
 		}
 	}
 	a.buffersMu.Unlock()
+	a.fsMu.Unlock()
 
 	// Leave fullscreen automatically when the target session disappeared
 	// (e.g. its shell exited, or it was killed elsewhere).

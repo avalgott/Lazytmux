@@ -389,10 +389,10 @@ func TestServiceCaptureScrollbackSetsPaneHeight(t *testing.T) {
 
 func TestServicePaneInputFlags(t *testing.T) {
 	mock := tmux.NewMockClient()
-	mock.Messages["devbox#flags"] = "1 1 1 12 34"
+	mock.Messages["devbox#flags"] = "1 1 1 12 34 %7"
 
 	svc := NewService(mock)
-	alt, mouse, cx, cy, err := svc.PaneInputFlags(context.Background(), "devbox")
+	alt, mouse, cx, cy, _, err := svc.PaneInputFlags(context.Background(), "devbox")
 	require.NoError(t, err)
 	assert.True(t, alt)
 	assert.True(t, mouse)

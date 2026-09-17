@@ -40,6 +40,7 @@ type fakeProvider struct {
 	wheelBlock   chan struct{} // when set, ForwardMouseWheel blocks until closed
 	wheelStarted chan struct{} // when set, signaled when ForwardMouseWheel is entered
 	flagsCalls   int           // PaneInputFlags invocation count
+	paneID       string        // pane ID returned by PaneInputFlags
 	err          error
 }
 
@@ -101,11 +102,11 @@ func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string) (session.P
 	return session.Preview{Content: sb.String(), PaneHeight: f.paneHeight}, f.err
 }
 
-func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, int, int, error) {
+func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, int, int, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.flagsCalls++
-	return f.altOn, f.sgrMouse, f.cursorX, f.cursorY, f.err
+	return f.altOn, f.sgrMouse, f.cursorX, f.cursorY, f.paneID, f.err
 }
 
 func (f *fakeProvider) ForwardMouseWheel(_ context.Context, name string, up bool, x, y int) error {
@@ -2601,4 +2602,33 @@ func TestScrollHintSkippedOnlyWhileBufferEmpty(t *testing.T) {
 	app.feedBuffer("devbox", "h2\nh3\nh4\nh5\nh6\nh7\nh8")
 	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
 	assert.True(t, app.previewScroll.IsActive(), "history in the buffer must override the stale hint")
+}
+
+// --- Copilot round-32 fixes: pane identity ---
+
+func TestBufferResetOnActivePaneChange(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P1", Full: "pane-one-content", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P2", Full: "pane-two-content", PaneID: "%2"}, nil)
+
+	snap := app.bufferFor("devbox").Snapshot()
+	assert.Equal(t, []string{"pane-two-content"}, snap, "the active pane changed: the old pane's buffer must be dropped")
+}
+
+func TestWheelForwardIgnoredOnPaneChange(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%2"}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+
+	// The user was looking at pane %1; the active pane is now %2.
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P1", Full: "P1", PaneID: "%1"}, nil)
+
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), app.wheelGen.Load(), app.sessionGen.Load(), -3, 0, 0, false)
+	require.NoError(t, err)
+	assert.Equal(t, wheelIgnored, d)
+	assert.Empty(t, p.wheelSnapshot(), "input meant for one pane must not reach its successor")
 }
