@@ -243,11 +243,17 @@ func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID string, lines []str
 	// panel must not stay on "Loading scrollback..." forever. The pane may
 	// also have changed between the fetch and this apply: the snapshot
 	// belongs to the pane that produced it.
-	if a.sessionGen.Load() != sGen || !a.paneMatches(a.fullscreen.Target(), paneID) {
+	if a.sessionGen.Load() != sGen {
 		if a.scroll.IsActive() && a.scroll.seq == seq {
 			a.restartScrollLoad()
 		}
 		return
+	}
+	// The freshly captured tmux snapshot is authoritative for its pane: a
+	// pane switch just before scrolling must rebind the session to it, not
+	// reject the load forever (no live captures run while browsing).
+	if !a.paneMatches(a.fullscreen.Target(), paneID) {
+		a.rebindPane(a.fullscreen.Target(), paneID)
 	}
 	applied, noHistory, err := a.applyScrollLoadState(a.scroll, seq, lines, paneH, loadErr)
 	if err != nil {
@@ -339,6 +345,25 @@ func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, stri
 		}
 	}
 	return lines, preview.PaneHeight, preview.PaneID, nil // nothing to browse — hint path
+}
+
+// rebindPane adopts a pane observed by a scrollback capture as the session's
+// live pane (a pane switch before scrolling means no live capture will
+// update the binding while browsing). The old pane's buffer is dropped.
+func (a *App) rebindPane(name, paneID string) {
+	if paneID == "" {
+		return
+	}
+	a.fsMu.Lock()
+	defer a.fsMu.Unlock()
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	if a.paneIDs[name] != "" && a.paneIDs[name] != paneID {
+		delete(a.buffers, name)
+		delete(a.bufferIDs, name)
+		delete(a.bufferGens, name)
+	}
+	a.paneIDs[name] = paneID
 }
 
 // paneMatches reports whether the pane a scrollback capture came from is the
@@ -483,13 +508,19 @@ func (a *App) restartPreviewScrollLoad() {
 // panes like Claude Code) returns to the live capture with a status note
 // instead: there is nothing to browse.
 func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID string, lines []string, paneH int, loadErr error) {
-	if a.sessionGen.Load() != sGen || !a.paneMatches(a.previewScrollTarget, paneID) {
+	if a.sessionGen.Load() != sGen {
 		// Same dead end as the fullscreen applier: restart the load under
 		// the current generation instead of stranding the loading panel.
 		if a.previewScroll.IsActive() && a.previewScroll.seq == seq {
 			a.restartPreviewScrollLoad()
 		}
 		return
+	}
+	// The freshly captured tmux snapshot is authoritative for its pane: a
+	// pane switch just before scrolling must rebind the session to it, not
+	// reject the load forever (no live captures run while browsing).
+	if !a.paneMatches(a.previewScrollTarget, paneID) {
+		a.rebindPane(a.previewScrollTarget, paneID)
 	}
 	applied, noHistory, err := a.applyScrollLoadState(a.previewScroll, seq, lines, paneH, loadErr)
 	if err != nil {

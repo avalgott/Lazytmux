@@ -2699,3 +2699,24 @@ func TestScrollSnapshotBufferUsedOnlyForMatchingPane(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, lines[0], "h1", "the previous pane's history must not appear under the new pane")
 }
+
+// --- Copilot round-37 fixes ---
+
+func TestPaneSwitchBeforeScrollingRebindsAndApplies(t *testing.T) {
+	p := &fakeProvider{paneHeight: 5, scrollbackPaneID: "%2"}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(20, 78)
+	seq := app.previewScroll.seq
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), "%2", make([]string, 25), 5, nil)
+
+	assert.True(t, app.previewScroll.loaded, "the freshly captured snapshot is authoritative for its pane and must apply")
+	app.buffersMu.Lock()
+	rebound := app.paneIDs["devbox"]
+	app.buffersMu.Unlock()
+	assert.Equal(t, "%2", rebound, "the pane observed by the capture rebinds the session")
+}
