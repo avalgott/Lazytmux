@@ -115,6 +115,18 @@ func (a *App) renderPreview(v *gocui.View) {
 // name been reused), so the stale completion must not feed history.
 func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, result session.Preview, err error) {
 	a.preview.Lock()
+	if a.sessionGen.Load() != gen {
+		// A refresh changed the session landscape while this capture was in
+		// flight: discard the result and the old cache alike, and let the
+		// render loop start a fresh capture (marking fetched throttles the
+		// retry). Without the clear, a session recreated under the same name
+		// and cursor index would inherit the old pane's screen.
+		a.preview.ClearContent()
+		a.preview.MarkFetched(name, cursorSnapshot)
+		a.preview.Unlock()
+		a.g.Update(func(*gocui.Gui) error { return nil })
+		return
+	}
 	if err == nil {
 		a.preview.Update(name, result.Content, cursorSnapshot, result.CursorX, result.CursorY)
 	} else {
@@ -123,9 +135,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 		a.preview.MarkFetched(name, cursorSnapshot)
 	}
 	a.preview.Unlock()
-	if a.sessionGen.Load() == gen {
-		a.feedBuffer(name, result.Full)
-	}
+	a.feedBufferIfCurrent(name, gen, result.Full)
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }
 

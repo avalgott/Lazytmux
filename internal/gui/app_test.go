@@ -1742,3 +1742,36 @@ func TestFullscreenWheelFallsBackWithoutSGRMouse(t *testing.T) {
 	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
 	assert.True(t, app.scroll.IsActive(), "an alternate-screen pane without SGR mouse must not receive SGR wheel events")
 }
+
+// --- Copilot round-5 fixes ---
+
+func TestMarkFetchedClearsForeignContent(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.preview.Lock()
+	app.preview.Update("session-A", "A-CONTENT", 0, 0, 0)
+	app.preview.MarkFetched("session-B", 0)
+	assert.Equal(t, "", app.preview.Content(), "a failed fetch for another session must not retag the old content")
+	app.preview.Unlock()
+}
+
+func TestMarkFetchedKeepsOwnContent(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.preview.Lock()
+	app.preview.Update("session-A", "A-CONTENT", 0, 0, 0)
+	app.preview.MarkFetched("session-A", 0)
+	assert.Equal(t, "A-CONTENT", app.preview.Content(), "a failed fetch for the same session keeps the cached content")
+	app.preview.Unlock()
+}
+
+func TestStaleGenerationDoesNotInstallResult(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	gen := app.sessionGen.Load()
+	app.sessionGen.Add(1) // a refresh happened while the capture was in flight
+
+	app.renderPreviewCapture("devbox", 0, gen, session.Preview{Content: "STALE", Full: "STALE"}, nil)
+	app.preview.Lock()
+	content := app.preview.Content()
+	app.preview.Unlock()
+	assert.Equal(t, "", content, "a stale completion must not install its result into the render cache")
+}

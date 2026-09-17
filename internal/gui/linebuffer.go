@@ -171,5 +171,7 @@ func capLines(lines []string, cap int) []string {
 	if len(lines) <= cap {
 		return lines
 	}
-	return lines[len(lines)-cap:]
+	// Clip the excess capacity: a plain re-slice would keep the discarded
+	// string references alive in the backing array for the buffer's lifetime.
+	return slices.Clip(lines[len(lines)-cap:])
 }

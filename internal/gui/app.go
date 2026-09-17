@@ -261,13 +261,14 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 		selected = sess.Name
 	}
 	a.sessions = sessions
-	// Invalidate in-flight captures: they record the generation they started
-	// under, and any refresh means the session landscape may have changed
-	// (kill, rename, prune). Stale completions must not feed history.
-	a.sessionGen.Add(1)
 
-	// Drop synthetic scrollback buffers of sessions that no longer exist.
+	// Invalidate in-flight captures and drop synthetic scrollback buffers of
+	// sessions that no longer exist, under one lock. Captures check their
+	// generation under the same lock before feeding (feedBufferIfCurrent),
+	// so a refresh can never interleave between the check and the feed —
+	// which would recreate a pruned buffer with stale content.
 	a.buffersMu.Lock()
+	a.sessionGen.Add(1)
 	for name := range a.buffers {
 		found := false
 		for _, s := range a.sessions {
@@ -404,13 +405,45 @@ func (a *App) setError(msg string) {
 const scrollBufferCap = 400
 
 // feedBuffer appends one full-pane capture to the session's synthetic
-// scrollback buffer, creating it on first use. Called from the capture
-// completion goroutine.
+// scrollback buffer, creating it on first use.
 func (a *App) feedBuffer(name, content string) {
 	if name == "" || content == "" {
 		return
 	}
-	a.bufferFor(name).Feed(content)
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	a.feedBufferLocked(name, content)
+}
+
+// feedBufferIfCurrent feeds the session's synthetic buffer only if the
+// session generation still matches. The check and the feed run under the
+// same lock that applySessionRefresh holds while bumping the generation and
+// pruning buffers, so a refresh cannot interleave between them (a stale
+// completion would otherwise recreate a pruned buffer).
+func (a *App) feedBufferIfCurrent(name string, gen uint64, content string) {
+	if name == "" || content == "" {
+		return
+	}
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	if a.sessionGen.Load() != gen {
+		return
+	}
+	a.feedBufferLocked(name, content)
+}
+
+// feedBufferLocked feeds the buffer without taking the map lock — the caller
+// holds it.
+func (a *App) feedBufferLocked(name, content string) {
+	if a.buffers == nil {
+		a.buffers = make(map[string]*LineBuffer)
+	}
+	b := a.buffers[name]
+	if b == nil {
+		b = NewLineBuffer(scrollBufferCap)
+		a.buffers[name] = b
+	}
+	b.Feed(content)
 }
 
 // bufferFor returns the session's synthetic scrollback buffer, creating an

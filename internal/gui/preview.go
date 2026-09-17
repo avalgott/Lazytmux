@@ -71,6 +71,12 @@ func (pc *PreviewCache) Invalidate() {
 	pc.mu.Unlock()
 }
 
+// ClearContent drops the cached content (the session landscape changed and
+// it belongs to a previous world). Caller must hold lock.
+func (pc *PreviewCache) ClearContent() {
+	pc.content = ""
+}
+
 // InvalidateTimestamp resets only the fetch timestamp so the next render
 // triggers a new capture even if content is still present.
 // Caller must hold lock.
@@ -81,9 +87,14 @@ func (pc *PreviewCache) InvalidateTimestamp() {
 // MarkFetched records the current time as the last fetch time and clears busy,
 // without updating the cached content. Use after a fetch that returned no
 // useful data to prevent tight retry loops. The session name is recorded so
-// the fetch gate does not keep firing over the stale-name mismatch.
+// the fetch gate does not keep firing over the stale-name mismatch; content
+// captured for a different session is dropped — retagging it would display
+// one session's screen under another's name.
 // Caller must hold lock.
 func (pc *PreviewCache) MarkFetched(name string, cursorIdx int) {
+	if pc.name != name {
+		pc.content = ""
+	}
 	pc.name = name
 	pc.cursor = cursorIdx
 	pc.busy = false
