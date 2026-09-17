@@ -426,7 +426,7 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 		fsGen := a.fullscreenGen.Load()
 		wGen := a.wheelGen.Load()
 		go func() {
-			d, actErr := a.decideFullscreenWheel(target, fsGen, delta, x, y, hasPos)
+			d, actErr := a.decideFullscreenWheel(target, fsGen, wGen, delta, x, y, hasPos)
 			if d == wheelForwarded || d == wheelIgnored {
 				return
 			}
@@ -467,16 +467,16 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 // decideFullscreenWheel runs the tmux queries for a live fullscreen wheel
 // event and returns the decision without touching UI state — safe to run
 // from a goroutine.
-func (a *App) decideFullscreenWheel(target string, fsGen uint64, delta, x, y int, hasPos bool) (wheelDecision, error) {
+func (a *App) decideFullscreenWheel(target string, fsGen, wGen uint64, delta, x, y int, hasPos bool) (wheelDecision, error) {
 	alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
 	if err == nil && alt && mouse {
-		// The generation check and the send are serialized with fullscreen
-		// transitions by fsMu: exit cannot race with injection — either the
-		// send completes before the exit, or the exit lands first and the
-		// check discards the event.
+		// The generation checks and the send are serialized with fullscreen
+		// and scroll-mode transitions by fsMu: exit cannot race with
+		// injection, and entering scroll mode (which must suppress pane
+		// input) invalidates the pending forward.
 		a.fsMu.Lock()
 		defer a.fsMu.Unlock()
-		if a.fullscreenGen.Load() != fsGen {
+		if a.fullscreenGen.Load() != fsGen || a.wheelGen.Load() != wGen {
 			return wheelIgnored, nil
 		}
 		if hasPos {
