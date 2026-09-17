@@ -789,7 +789,7 @@ func TestScrollLoadFailureExitsScrollMode(t *testing.T) {
 	app.scroll.Enter(20, 80)
 	seq := app.scroll.seq
 
-	app.applyScrollLoad(seq, nil, 0, assert.AnError)
+	app.applyScrollLoad(seq, app.sessionGen.Load(), nil, 0, assert.AnError)
 	assert.False(t, app.scroll.IsActive(), "a failed load must not strand the user in scroll mode")
 	require.NotEmpty(t, app.logs)
 	assert.Contains(t, app.logs[len(app.logs)-1].msg, "scrollback:")
@@ -803,13 +803,13 @@ func TestScrollLoadAppliesSnapshot(t *testing.T) {
 	app.scroll.Enter(20, 80)
 	seq := app.scroll.seq
 
-	app.applyScrollLoad(seq, []string{"a", "b", "c"}, 0, nil)
+	app.applyScrollLoad(seq, app.sessionGen.Load(), []string{"a", "b", "c"}, 0, nil)
 	assert.True(t, app.scroll.IsActive())
 	assert.True(t, app.scroll.loaded)
 	assert.Equal(t, 3, app.scroll.total)
 
 	// A stale load is ignored.
-	app.applyScrollLoad(seq-1, []string{"stale"}, 0, nil)
+	app.applyScrollLoad(seq-1, app.sessionGen.Load(), []string{"stale"}, 0, nil)
 	assert.Equal(t, 3, app.scroll.total, "stale loads must not overwrite the snapshot")
 }
 
@@ -858,7 +858,7 @@ func loadPreviewSnapshot(t *testing.T, app *App, lines []string) {
 	t.Helper()
 	app.previewScroll.Move(-1)
 	seq := app.previewScroll.seq
-	app.applyPreviewScrollLoad(seq, lines, 0, nil)
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), lines, 0, nil)
 	require.True(t, app.previewScroll.loaded)
 }
 
@@ -980,7 +980,7 @@ func TestPreviewScrollLoadAtBottomStays(t *testing.T) {
 
 	// A snapshot shorter than the viewport clamps the offset to the bottom;
 	// the mode stays active (G or a downward gesture returns to live).
-	app.applyPreviewScrollLoad(seq, make([]string, 5), 0, nil)
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), make([]string, 5), 0, nil)
 	assert.True(t, app.previewScroll.IsActive(), "small snapshots keep scroll mode active at the bottom")
 	assert.True(t, app.previewScroll.loaded)
 	assert.Equal(t, 0, app.previewScroll.offsetFromBottom)
@@ -1032,7 +1032,7 @@ func TestPreviewScrollTopWhileLoading(t *testing.T) {
 	// Apply the load directly (the shared helper simulates a first upward
 	// gesture, which would cancel the pending top).
 	seq := app.previewScroll.seq
-	app.applyPreviewScrollLoad(seq, make([]string, 20), 0, nil)
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), make([]string, 20), 0, nil)
 	assert.True(t, app.previewScroll.IsActive())
 	assert.Equal(t, 10, app.previewScroll.offsetFromBottom, "pending top lands on the oldest line")
 }
@@ -1090,7 +1090,7 @@ func TestPreviewScrollLoadFailureExits(t *testing.T) {
 	app.previewScroll.Enter(10, 78)
 	seq := app.previewScroll.seq
 
-	app.applyPreviewScrollLoad(seq, nil, 0, assert.AnError)
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), nil, 0, assert.AnError)
 	assert.False(t, app.previewScroll.IsActive())
 	require.NotEmpty(t, app.logs)
 	assert.Contains(t, app.logs[len(app.logs)-1].msg, "scrollback:")
@@ -1103,7 +1103,7 @@ func TestPreviewScrollStaleLoadIgnored(t *testing.T) {
 	app.previewScroll.Enter(10, 78)
 	loadPreviewSnapshot(t, app, make([]string, 20))
 
-	app.applyPreviewScrollLoad(app.previewScroll.seq-1, []string{"stale"}, 0, nil)
+	app.applyPreviewScrollLoad(app.previewScroll.seq-1, app.sessionGen.Load(), []string{"stale"}, 0, nil)
 	assert.Equal(t, 20, app.previewScroll.total, "stale loads must not overwrite the snapshot")
 }
 
@@ -1229,7 +1229,7 @@ func TestPreviewScrollTopThenMoveWhileLoading(t *testing.T) {
 	assert.False(t, app.previewScroll.pendingTop)
 
 	seq := app.previewScroll.seq
-	app.applyPreviewScrollLoad(seq, make([]string, 30), 0, nil)
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), make([]string, 30), 0, nil)
 	assert.True(t, app.previewScroll.IsActive(), "offset 2 is not the bottom, so browsing continues")
 	assert.Equal(t, 2, app.previewScroll.offsetFromBottom, "the later navigation wins over the stale top")
 }
@@ -1245,7 +1245,7 @@ func TestFullscreenScrollZeroHistoryExitsWithHint(t *testing.T) {
 
 	// 20 lines, pane height 20: the snapshot holds nothing but the visible
 	// screen, so scroll mode exits with the no-scrollback hint.
-	app.applyScrollLoad(seq, make([]string, 20), 20, nil)
+	app.applyScrollLoad(seq, app.sessionGen.Load(), make([]string, 20), 20, nil)
 	assert.False(t, app.scroll.IsActive(), "a snapshot without history must not keep scroll mode active")
 	assert.True(t, app.fullscreenNoScrollback, "the hint flags the pane as having no scrollback")
 }
@@ -1258,7 +1258,7 @@ func TestFullscreenScrollRealHistoryClearsHint(t *testing.T) {
 	app.scroll.Enter(20, 80)
 	seq := app.scroll.seq
 
-	app.applyScrollLoad(seq, make([]string, 25), 20, nil)
+	app.applyScrollLoad(seq, app.sessionGen.Load(), make([]string, 25), 20, nil)
 	assert.True(t, app.scroll.IsActive())
 	assert.False(t, app.fullscreenNoScrollback, "a load with real history clears the hint")
 }
@@ -1282,7 +1282,7 @@ func TestPreviewScrollZeroHistoryExitsWithStatus(t *testing.T) {
 	app.previewScroll.Enter(10, 78)
 	seq := app.previewScroll.seq
 
-	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), make([]string, 5), 5, nil)
 	// The hint applies on the event loop via g.Update (headless no-op) —
 	// drive the applier directly.
 	app.applyNoHistoryHint("devbox", false, false, false)
@@ -1365,7 +1365,7 @@ func TestFullscreenScrollStaleLoadKeepsHint(t *testing.T) {
 	app.scroll.Enter(20, 80)
 
 	// A superseded load (seq bumped by a reload) must not touch the hint.
-	app.applyScrollLoad(app.scroll.seq-1, make([]string, 25), 20, nil)
+	app.applyScrollLoad(app.scroll.seq-1, app.sessionGen.Load(), make([]string, 25), 20, nil)
 	assert.True(t, app.fullscreenNoScrollback, "a stale load must not clear the no-scrollback hint")
 }
 
@@ -1479,7 +1479,7 @@ func TestPreviewScrollZeroHistorySetsScrollHint(t *testing.T) {
 	app.previewScroll.Enter(10, 78)
 	seq := app.previewScroll.seq
 
-	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), make([]string, 5), 5, nil)
 	app.applyNoHistoryHint("devbox", false, false, false)
 	assert.False(t, app.previewScroll.IsActive())
 	assert.Equal(t, "devbox", app.scrollHintName)
@@ -1732,7 +1732,7 @@ func TestSyntheticHistorySurvivesApplierCheck(t *testing.T) {
 	seq := app.previewScroll.seq
 	lines, paneH, err := app.fetchScrollSnapshot("devbox", 80)
 	require.NoError(t, err)
-	app.applyPreviewScrollLoad(seq, lines, paneH, nil)
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), lines, paneH, nil)
 
 	assert.True(t, app.previewScroll.IsActive(), "the applier must accept synthetic history the fetch accepted")
 	assert.True(t, app.previewScroll.loaded)
@@ -1951,7 +1951,7 @@ func TestScrollHintOffersEnterOnlyWhenForwardingAvailable(t *testing.T) {
 	app.previewScroll.Enter(10, 78)
 	seq := app.previewScroll.seq
 
-	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), make([]string, 5), 5, nil)
 	app.applyNoHistoryHint("devbox", true, true, false)
 	require.NotEmpty(t, app.logs)
 	assert.Contains(t, app.logs[len(app.logs)-1].msg, "Hit Enter", "an alt-screen pane can be scrolled inside, so the hint says how")
@@ -1964,7 +1964,7 @@ func TestScrollHintPlainForPlainPanes(t *testing.T) {
 	app.previewScroll.Enter(10, 78)
 	seq := app.previewScroll.seq
 
-	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), make([]string, 5), 5, nil)
 	app.applyNoHistoryHint("devbox", false, false, false)
 	require.NotEmpty(t, app.logs)
 	assert.NotContains(t, app.logs[len(app.logs)-1].msg, "Hit Enter", "a plain shell cannot be scrolled inside; the hint must not send the user there")
@@ -2350,4 +2350,21 @@ func TestEnterScrollWaitsForInFlightForward(t *testing.T) {
 	close(p.wheelBlock)
 	<-sendDone
 	<-enterDone
+}
+
+// --- Copilot round-20 fixes ---
+
+func TestFullscreenScrollLoadRejectedAfterRecreation(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	app.scroll.Enter(20, 80)
+	seq := app.scroll.seq
+	sGen := app.sessionGen.Load()
+
+	// The session is recreated under the same name while the load is in flight.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2", Created: 200}}, nil)
+
+	app.applyScrollLoad(seq, sGen, make([]string, 25), 20, nil)
+	assert.False(t, app.scroll.loaded, "a stale fullscreen load must not install the old pane's snapshot")
 }

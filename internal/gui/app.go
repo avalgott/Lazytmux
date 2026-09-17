@@ -88,11 +88,12 @@ type App struct {
 	refreshBusy            atomic.Bool // true while a background session refresh is in flight
 	attachTarget           string      // session to attach to; set on Enter, main() acts on it
 	buffers                map[string]*LineBuffer
-	bufferIDs              map[string]string // buffer name -> tmux session ID it belongs to
+	bufferIDs              map[string]string // buffer name -> "ID@Created" identity it belongs to
 	bufferGens             map[string]uint64 // generation the buffer was last fed under
 	buffersMu              sync.Mutex        // guards the buffers map (LineBuffer locks itself)
 	sessionGen             atomic.Uint64
-	lastSessionSig         string // name=ID signature of the last applied refresh
+	lastSessionSig         string      // name=ID signature of the last applied refresh
+	quitting               atomic.Bool // set when the main loop exits; the wheel worker drops leftovers
 
 	// scrollHint is the transient preview-title hint shown after a scroll
 	// attempt on a session that keeps its own scrollback (alternate-screen
@@ -224,6 +225,10 @@ func (a *App) Run() error {
 
 	err := a.g.MainLoop()
 	close(done)
+	// Stop the wheel worker: the app is recreated after every attach/detach
+	// cycle, and an unclosed queue would leak the worker and its app.
+	a.quitting.Store(true)
+	close(a.wheelQueue)
 	if err != nil {
 		if strings.Contains(err.Error(), "quit") {
 			return nil
@@ -313,9 +318,16 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 				identity := s.ID + "@" + strconv.FormatInt(s.Created, 10)
 				if (a.bufferIDs[name] != "" && a.bufferIDs[name] != identity) ||
 					(a.bufferIDs[name] == "" && a.bufferGens[name] != a.sessionGen.Load()) {
+					// The buffer belongs to a dead incarnation: drop it and
+					// ALL of its metadata — a lingering binding would grow
+					// the maps unboundedly across recreate/remove cycles,
+					// and a fresh buffer starts unbound anyway.
 					delete(a.buffers, name)
+					delete(a.bufferIDs, name)
+					delete(a.bufferGens, name)
+				} else {
+					a.bufferIDs[name] = identity
 				}
-				a.bufferIDs[name] = identity
 				break
 			}
 		}

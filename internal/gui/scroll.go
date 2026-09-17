@@ -197,7 +197,7 @@ func (a *App) restartScrollLoad() {
 // and target pair in a goroutine; the single atomic tmux capture runs
 // outside the event loop, and only the latest load applies. apply is the
 // mode-specific event-loop applier.
-func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(seq int64, lines []string, paneH int, loadErr error)) {
+func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(seq int64, sGen uint64, lines []string, paneH int, loadErr error)) {
 	if target == "" || !ss.IsActive() {
 		return
 	}
@@ -205,21 +205,22 @@ func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(
 
 	ss.seq++
 	seq := ss.seq
+	sGen := a.sessionGen.Load()
 	go func() {
 		lines, paneH, err := a.fetchScrollSnapshot(target, width)
 		if err != nil {
-			a.finishScrollLoadFor(apply, seq, nil, 0, err)
+			a.finishScrollLoadFor(apply, seq, sGen, nil, 0, err)
 			return
 		}
-		a.finishScrollLoadFor(apply, seq, lines, paneH, nil)
+		a.finishScrollLoadFor(apply, seq, sGen, lines, paneH, nil)
 	}()
 }
 
 // finishScrollLoadFor applies a snapshot load (or its failure) on the event
 // loop via the given mode-specific applier.
-func (a *App) finishScrollLoadFor(apply func(seq int64, lines []string, paneH int, loadErr error), seq int64, lines []string, paneH int, loadErr error) {
+func (a *App) finishScrollLoadFor(apply func(seq int64, sGen uint64, lines []string, paneH int, loadErr error), seq int64, sGen uint64, lines []string, paneH int, loadErr error) {
 	a.g.Update(func(*gocui.Gui) error {
-		apply(seq, lines, paneH, loadErr)
+		apply(seq, sGen, lines, paneH, loadErr)
 		return nil
 	})
 }
@@ -231,7 +232,12 @@ func (a *App) finishScrollLoadFor(apply func(seq int64, lines []string, paneH in
 // history beyond the visible screen (alternate-screen panes like Claude Code
 // have no saved history at all) leaves scroll mode too, with the
 // no-scrollback hint.
-func (a *App) applyScrollLoad(seq int64, lines []string, paneH int, loadErr error) {
+func (a *App) applyScrollLoad(seq int64, sGen uint64, lines []string, paneH int, loadErr error) {
+	// A session recreated under the same name while the capture was in
+	// flight must not receive the old pane's snapshot.
+	if a.sessionGen.Load() != sGen {
+		return
+	}
 	applied, noHistory, err := a.applyScrollLoadState(a.scroll, seq, lines, paneH, loadErr)
 	if err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))
@@ -438,7 +444,10 @@ func (a *App) restartPreviewScrollLoad() {
 // A snapshot with no history beyond the visible screen (alternate-screen
 // panes like Claude Code) returns to the live capture with a status note
 // instead: there is nothing to browse.
-func (a *App) applyPreviewScrollLoad(seq int64, lines []string, paneH int, loadErr error) {
+func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, lines []string, paneH int, loadErr error) {
+	if a.sessionGen.Load() != sGen {
+		return
+	}
 	applied, noHistory, err := a.applyScrollLoadState(a.previewScroll, seq, lines, paneH, loadErr)
 	if err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))

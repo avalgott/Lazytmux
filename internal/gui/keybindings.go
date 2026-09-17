@@ -516,6 +516,9 @@ func (a *App) enqueueWheelTask(t wheelTask) {
 // goroutines would let delayed flag queries forward events out of order.
 func (a *App) wheelWorker() {
 	for t := range a.wheelQueue {
+		if a.quitting.Load() {
+			continue // the app is shutting down: drop the leftovers
+		}
 		a.processWheelTask(t)
 	}
 }
