@@ -470,12 +470,14 @@ func (a *App) decideFullscreenWheel(target string, fsGen, wGen, sGen uint64, del
 		// injection, and entering scroll mode (which must suppress pane
 		// input) invalidates the pending forward. The pane the user was
 		// looking at must still be the active one — a pane switch must not
-		// receive input meant for its predecessor.
+		// receive input meant for its predecessor. The pane binding is read
+		// UNDER fsMu (fsMu -> buffersMu order), so a live capture cannot
+		// update it between the read and the send.
+		a.fsMu.Lock()
+		defer a.fsMu.Unlock()
 		a.buffersMu.Lock()
 		recorded := a.paneIDs[target]
 		a.buffersMu.Unlock()
-		a.fsMu.Lock()
-		defer a.fsMu.Unlock()
 		if a.fullscreenGen.Load() != fsGen || a.wheelGen.Load() != wGen || a.sessionGen.Load() != sGen ||
 			(recorded != "" && recorded != paneID) {
 			return wheelIgnored, nil

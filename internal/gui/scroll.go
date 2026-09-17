@@ -326,13 +326,30 @@ func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, erro
 	// History is anything beyond the current screen, whose normalized height
 	// (blank cursor rows stripped) is smaller than the tmux pane height.
 	// The normalized height is what the applier's noHistory check compares
-	// against, so it must travel in the pane-height slot.
+	// against, so it must travel in the pane-height slot. The buffer belongs
+	// to a specific pane: if the active pane changed since it was recorded,
+	// its history must not be shown under the new pane.
 	if b := a.bufferLookup(target); b != nil {
-		if snap, screenH := b.SnapshotWithHeight(); len(snap) > screenH {
-			return truncateLines(snap, width), screenH, nil
+		if a.paneMatches(target, preview.PaneID) {
+			if snap, screenH := b.SnapshotWithHeight(); len(snap) > screenH {
+				return truncateLines(snap, width), screenH, nil
+			}
 		}
 	}
 	return lines, preview.PaneHeight, nil // nothing to browse — hint path
+}
+
+// paneMatches reports whether the pane a scrollback capture came from is the
+// one the session's buffer belongs to. An unrecorded pane (no live capture
+// yet, or an old tmux) cannot conflict and passes.
+func (a *App) paneMatches(name, paneID string) bool {
+	if paneID == "" {
+		return true
+	}
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	recorded := a.paneIDs[name]
+	return recorded == "" || recorded == paneID
 }
 
 // truncateLines clips each line to the given width (same rule as

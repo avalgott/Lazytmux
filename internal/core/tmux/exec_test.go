@@ -182,7 +182,7 @@ func TestCaptureHistoryPreservesBlankLines(t *testing.T) {
 
 	c := &ExecClient{tmuxBin: fake}
 
-	content, paneH, err := c.CapturePaneANSIHistory(context.Background(), "s")
+	content, paneH, _, err := c.CapturePaneANSIHistory(context.Background(), "s")
 	require.NoError(t, err)
 	assert.Equal(t, "\n\nx\n\n\n", content, "history captures must preserve blank lines")
 	assert.Equal(t, 63, paneH, "the trailing pane-height line is parsed separately")
@@ -226,7 +226,7 @@ func TestSplitPaneHeightLine(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			content, h, err := splitPaneHeightLine(tt.in)
+			content, h, _, err := splitPaneHeightLine(tt.in)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return

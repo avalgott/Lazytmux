@@ -292,11 +292,11 @@ func (s *Service) Capture(ctx context.Context, name string, width, height int) (
 // CaptureScrollback captures the session's whole pane history in one
 // atomic tmux operation.
 func (s *Service) CaptureScrollback(ctx context.Context, name string) (Preview, error) {
-	content, paneH, err := s.tmux.CapturePaneANSIHistory(ctx, name)
+	content, paneH, paneID, err := s.tmux.CapturePaneANSIHistory(ctx, name)
 	if err != nil {
 		return Preview{}, err
 	}
-	return Preview{Content: content, PaneHeight: paneH}, nil
+	return Preview{Content: content, PaneHeight: paneH, PaneID: paneID}, nil
 }
 
 // PaneInputFlags reports the active pane's input mode.

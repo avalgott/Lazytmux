@@ -60,7 +60,7 @@ type Client interface {
 	// concurrently cannot produce a partial snapshot. The height lets callers
 	// detect alternate-screen panes, whose capture contains nothing beyond
 	// the visible screen.
-	CapturePaneANSIHistory(ctx context.Context, target string) (content string, paneHeight int, err error)
+	CapturePaneANSIHistory(ctx context.Context, target string) (content string, paneHeight int, paneID string, err error)
 
 	// PaneInputFlags reports the pane's input mode: alternate screen active,
 	// SGR (1006) mouse tracking enabled, and the 0-based pane cursor

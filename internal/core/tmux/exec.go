@@ -406,12 +406,12 @@ func splitCursorPair(out string) (content string, cursorX, cursorY int, paneID s
 // distinguishes real scrollback from a snapshot that contains nothing but
 // the visible screen (alternate-screen panes such as Claude Code have no
 // saved history at all).
-func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) (string, int, error) {
+func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) (string, int, string, error) {
 	ctx2, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
 	args := []string{"capture-pane", "-t", target, "-ep", "-S", "-", ";",
-		"display-message", "-t", target, "-p", "#{pane_height}"}
+		"display-message", "-t", target, "-p", "#{pane_height} #{pane_id}"}
 	fullArgs := c.prependSocket(args)
 	cmd := exec.CommandContext(ctx2, c.tmuxBin, fullArgs...)
 	var stderr strings.Builder
@@ -419,7 +419,7 @@ func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) 
 	out, err := cmd.Output()
 	c.logCmd("CapturePaneANSIHistory", fullArgs, string(out), err)
 	if err != nil {
-		return "", 0, fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
+		return "", 0, "", fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return splitPaneHeightLine(string(out))
 }
@@ -452,17 +452,25 @@ func (c *ExecClient) SendMouseWheel(ctx context.Context, target string, up bool,
 // "capture-pane -ep -S - ; display-message -p #{pane_height}" into the raw
 // capture content (its trailing newline preserved — capture output terminates
 // with one) and the pane height.
-func splitPaneHeightLine(out string) (string, int, error) {
+func splitPaneHeightLine(out string) (string, int, string, error) {
 	s := strings.TrimRight(out, "\n")
 	idx := strings.LastIndex(s, "\n")
 	if idx < 0 {
-		return "", 0, fmt.Errorf("capture output missing pane-height line")
+		return "", 0, "", fmt.Errorf("capture output missing pane-height line")
 	}
-	h, err := strconv.Atoi(strings.TrimSpace(s[idx+1:]))
+	fields := strings.Fields(s[idx+1:])
+	if len(fields) < 1 {
+		return "", 0, "", fmt.Errorf("capture output missing pane-height line")
+	}
+	h, err := strconv.Atoi(fields[0])
 	if err != nil {
-		return "", 0, fmt.Errorf("invalid pane height %q: %w", s[idx+1:], err)
+		return "", 0, "", fmt.Errorf("invalid pane height %q: %w", fields[0], err)
 	}
-	return s[:idx+1], h, nil
+	paneID := ""
+	if len(fields) >= 2 {
+		paneID = fields[1]
+	}
+	return s[:idx+1], h, paneID, nil
 }
 
 // parseInputFlags parses the display-message output of

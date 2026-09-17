@@ -232,14 +232,14 @@ func (m *MockClient) CapturePaneANSIWithCursor(_ context.Context, target string)
 	return m.Captured[target], cursorX, cursorY, m.PaneID, nil
 }
 
-func (m *MockClient) CapturePaneANSIHistory(_ context.Context, target string) (string, int, error) {
+func (m *MockClient) CapturePaneANSIHistory(_ context.Context, target string) (string, int, string, error) {
 	if m.ErrCapture != nil {
-		return "", 0, m.ErrCapture
+		return "", 0, "", m.ErrCapture
 	}
 	if content, ok := m.RangeCaptures[target+":hist"]; ok {
-		return content, m.PaneHeight, nil
+		return content, m.PaneHeight, m.PaneID, nil
 	}
-	return m.Captured[target], m.PaneHeight, nil
+	return m.Captured[target], m.PaneHeight, m.PaneID, nil
 }
 
 func (m *MockClient) PaneInputFlags(_ context.Context, target string) (bool, bool, int, int, string, error) {

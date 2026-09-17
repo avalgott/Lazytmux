@@ -18,30 +18,31 @@ import (
 // fakeProvider implements session.Provider for tests. Mutations are recorded
 // by background goroutines (the dialog handlers), so access is synchronized.
 type fakeProvider struct {
-	mu           sync.Mutex
-	infos        []session.Info
-	creates      []session.CreateOpts
-	killed       []string
-	renames      []renameCall
-	resizes      []resizeCall
-	captured     session.Preview
-	keys         map[string][]string // session -> forwarded tmux key names
-	literals     map[string]string   // session -> forwarded literal text
-	pastes       map[string]string   // session -> pasted text
-	scrollRanges []scrollRange       // (start,end) pairs passed to CaptureScrollback
-	history      int                 // value returned by HistorySize
-	paneHeight   int                 // value returned by PaneHeight
-	altOn        bool                // value returned by PaneInputFlags
-	sgrMouse     bool                // value returned by PaneInputFlags (SGR mouse)
-	wheelErr     error               // error for ForwardMouseWheel only
-	cursorX      int
-	cursorY      int
-	wheels       []wheelCall   // recorded ForwardMouseWheel calls
-	wheelBlock   chan struct{} // when set, ForwardMouseWheel blocks until closed
-	wheelStarted chan struct{} // when set, signaled when ForwardMouseWheel is entered
-	flagsCalls   int           // PaneInputFlags invocation count
-	paneID       string        // pane ID returned by PaneInputFlags
-	err          error
+	mu               sync.Mutex
+	infos            []session.Info
+	creates          []session.CreateOpts
+	killed           []string
+	renames          []renameCall
+	resizes          []resizeCall
+	captured         session.Preview
+	keys             map[string][]string // session -> forwarded tmux key names
+	literals         map[string]string   // session -> forwarded literal text
+	pastes           map[string]string   // session -> pasted text
+	scrollRanges     []scrollRange       // (start,end) pairs passed to CaptureScrollback
+	history          int                 // value returned by HistorySize
+	paneHeight       int                 // value returned by PaneHeight
+	altOn            bool                // value returned by PaneInputFlags
+	sgrMouse         bool                // value returned by PaneInputFlags (SGR mouse)
+	wheelErr         error               // error for ForwardMouseWheel only
+	cursorX          int
+	cursorY          int
+	wheels           []wheelCall   // recorded ForwardMouseWheel calls
+	wheelBlock       chan struct{} // when set, ForwardMouseWheel blocks until closed
+	wheelStarted     chan struct{} // when set, signaled when ForwardMouseWheel is entered
+	flagsCalls       int           // PaneInputFlags invocation count
+	paneID           string        // pane ID returned by PaneInputFlags
+	scrollbackPaneID string        // pane ID returned by CaptureScrollback
+	err              error
 }
 
 type renameCall struct{ from, to string }
@@ -99,7 +100,7 @@ func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string) (session.P
 	for i := start; i <= end; i++ {
 		fmt.Fprintf(&sb, "line %d\n", i)
 	}
-	return session.Preview{Content: sb.String(), PaneHeight: f.paneHeight}, f.err
+	return session.Preview{Content: sb.String(), PaneHeight: f.paneHeight, PaneID: f.scrollbackPaneID}, f.err
 }
 
 func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, int, int, string, error) {
@@ -2673,4 +2674,28 @@ func TestStaleCaptureDoesNotRecordPane(t *testing.T) {
 	_, recorded := app.paneIDs["devbox"]
 	app.buffersMu.Unlock()
 	assert.False(t, recorded, "a stale capture must not repopulate pane metadata")
+}
+
+// --- Copilot round-35 fixes ---
+
+func TestScrollSnapshotBufferUsedOnlyForMatchingPane(t *testing.T) {
+	p := &fakeProvider{paneHeight: 5, scrollbackPaneID: "%1"}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+	// Record pane %1 as the live pane and accumulate history.
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.feedBuffer("devbox", "h1\nh2\nh3\nh4\nh5\nh6\nh7")
+	app.feedBuffer("devbox", "h2\nh3\nh4\nh5\nh6\nh7\nh8")
+
+	// The scrollback capture comes from the same pane: the buffer is used.
+	lines, _, err := app.fetchScrollSnapshot("devbox", 80)
+	require.NoError(t, err)
+	assert.Contains(t, lines[0], "h1")
+
+	// The active pane changed: the old pane's history must not be shown.
+	p.scrollbackPaneID = "%2"
+	lines, _, err = app.fetchScrollSnapshot("devbox", 80)
+	require.NoError(t, err)
+	assert.NotContains(t, lines[0], "h1", "the previous pane's history must not appear under the new pane")
 }
