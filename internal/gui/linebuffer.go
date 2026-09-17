@@ -85,11 +85,14 @@ func (b *LineBuffer) update(scr []string) []string {
 	// Scroll-up: suffix of tail matches prefix of scr.
 	if d, ok := shiftUp(tail, scr); ok && d > 0 {
 		added := scr[n-d:]
-		// Accept when most added lines are novel, or when the added block is
-		// small and does not replay the dropped block (rotations replay the
-		// dropped lines; repeated log/status output replays only some).
+		// Accept a shift when most added lines are novel; when they repeat
+		// recent output, still accept small blocks that do not replay the
+		// dropped lines (rotations replay them), and larger blocks unless
+		// they repaint the same screen region (a mid-screen edit masquerades
+		// as a large shift with an all-known bottom block).
 		if majorityFresh(added, b.lines) ||
-			(len(added) <= max(2, n/5) && !majorityEqual(added, tail[:d])) {
+			(!majorityEqual(added, tail[:d]) &&
+				(len(added) <= max(2, n/5) || !majorityEqual(added, tail[n-d:]))) {
 			return capLines(append(b.lines, added...), b.cap)
 		}
 	}
@@ -97,7 +100,8 @@ func (b *LineBuffer) update(scr []string) []string {
 	if d, ok := shiftDown(tail, scr); ok && d > 0 {
 		added := scr[:d]
 		if majorityFresh(added, b.lines) ||
-			(len(added) <= max(2, n/5) && !majorityEqual(added, tail[n-d:])) {
+			(!majorityEqual(added, tail[n-d:]) &&
+				(len(added) <= max(2, n/5) || !majorityEqual(added, tail[:d]))) {
 			return capLines(append(append([]string(nil), added...), b.lines...), b.cap)
 		}
 	}

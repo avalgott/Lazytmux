@@ -293,16 +293,19 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 		for _, s := range a.sessions {
 			if s.Name == name {
 				found = true
-				// A bound buffer belongs to a dead incarnation when its ID
-				// changed. An UNBOUND buffer (fed between polls) may only
-				// adopt the current identity if it was fed under the current
+				// Buffers are bound to the (ID, Created) identity — tmux
+				// recycles IDs after a server restart. A bound buffer
+				// belongs to a dead incarnation when its identity changed.
+				// An UNBOUND buffer (fed between polls) may only adopt the
+				// current identity if it was fed under the current
 				// generation — otherwise it holds the previous
 				// incarnation's output and is dropped.
-				if (a.bufferIDs[name] != "" && a.bufferIDs[name] != s.ID) ||
+				identity := s.ID + "@" + strconv.FormatInt(s.Created, 10)
+				if (a.bufferIDs[name] != "" && a.bufferIDs[name] != identity) ||
 					(a.bufferIDs[name] == "" && a.bufferGens[name] != a.sessionGen.Load()) {
 					delete(a.buffers, name)
 				}
-				a.bufferIDs[name] = s.ID
+				a.bufferIDs[name] = identity
 				break
 			}
 		}

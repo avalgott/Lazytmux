@@ -1275,6 +1275,9 @@ func TestPreviewScrollZeroHistoryExitsWithStatus(t *testing.T) {
 	seq := app.previewScroll.seq
 
 	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	// The hint applies on the event loop via g.Update (headless no-op) —
+	// drive the applier directly.
+	app.applyNoHistoryHint("devbox", false, false, false)
 	assert.False(t, app.previewScroll.IsActive())
 	assert.Equal(t, "", app.previewScrollTarget)
 	require.NotEmpty(t, app.logs)
@@ -1469,6 +1472,7 @@ func TestPreviewScrollZeroHistorySetsScrollHint(t *testing.T) {
 	seq := app.previewScroll.seq
 
 	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	app.applyNoHistoryHint("devbox", false, false, false)
 	assert.False(t, app.previewScroll.IsActive())
 	assert.Equal(t, "devbox", app.scrollHintName)
 	assert.True(t, app.scrollHintUntil.After(time.Now()), "the hint is transient, starting now")
@@ -1937,6 +1941,7 @@ func TestScrollHintOffersEnterOnlyWhenForwardingAvailable(t *testing.T) {
 	seq := app.previewScroll.seq
 
 	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	app.applyNoHistoryHint("devbox", true, true, false)
 	require.NotEmpty(t, app.logs)
 	assert.Contains(t, app.logs[len(app.logs)-1].msg, "Hit Enter", "an alt-screen pane can be scrolled inside, so the hint says how")
 }
@@ -1949,6 +1954,7 @@ func TestScrollHintPlainForPlainPanes(t *testing.T) {
 	seq := app.previewScroll.seq
 
 	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	app.applyNoHistoryHint("devbox", false, false, false)
 	require.NotEmpty(t, app.logs)
 	assert.NotContains(t, app.logs[len(app.logs)-1].msg, "Hit Enter", "a plain shell cannot be scrolled inside; the hint must not send the user there")
 	assert.Contains(t, app.logs[len(app.logs)-1].msg, "No scrollback available.")
@@ -2030,4 +2036,41 @@ func TestWheelDecisionConcurrentWithFullscreenChanges(t *testing.T) {
 		app.fullscreen.Exit()
 	}
 	wg.Wait()
+}
+
+// --- Copilot round-11 fixes ---
+
+func TestBufferResetOnRecycledIDWithNewCreated(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 100}}, nil)
+	app.feedBuffer("devbox", "old-server-output")
+
+	// tmux restarted: the ID recycled to $0 but the session is new.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 200}}, nil)
+	assert.Nil(t, app.bufferLookup("devbox"), "a recycled ID with a new creation time is a new session")
+}
+
+func TestApplyNoHistoryHintPlain(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+
+	app.applyNoHistoryHint("devbox", false, false, false)
+	assert.False(t, app.previewScroll.IsActive())
+	assert.Equal(t, "devbox", app.scrollHintName)
+	assert.Equal(t, "$1", app.scrollHintID)
+	require.NotEmpty(t, app.logs)
+	assert.NotContains(t, app.logs[len(app.logs)-1].msg, "Hit Enter")
+}
+
+func TestApplyNoHistoryHintWithForwarding(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+
+	app.applyNoHistoryHint("devbox", true, true, false)
+	require.NotEmpty(t, app.logs)
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "Hit Enter")
 }

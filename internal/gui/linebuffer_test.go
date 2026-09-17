@@ -236,3 +236,14 @@ func TestLineBufferCappedSeedThenShrinkReseeds(t *testing.T) {
 	b.Feed(screen("x", "y"))
 	assert.Equal(t, []string{"x", "y"}, b.Snapshot(), "an unmatched shrink after a capped seed must reseed, not slice")
 }
+
+func TestLineBufferRepeatedMultiRowScrollAccumulates(t *testing.T) {
+	b := NewLineBuffer(100)
+	base := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	b.Feed(screen(base...))
+	// A 3-row scroll whose incoming rows are repeated log lines: the shift
+	// is genuine and the three rows that scrolled off must accumulate.
+	b.Feed(screen("d", "e", "f", "g", "h", "i", "j", "L", "L", "L"))
+	want := append(append([]string(nil), base...), "L", "L", "L")
+	assert.Equal(t, want, b.Snapshot())
+}

@@ -433,8 +433,9 @@ func (c *ExecClient) PaneInputFlags(ctx context.Context, target string) (bool, b
 }
 
 // SendMouseWheel sends a mouse wheel event to the target pane's input stream
-// as SGR mouse escape sequences (press + release). A program with mouse
-// tracking enabled reads them as a real wheel event.
+// as a single SGR mouse escape sequence (wheel motion is an impulse — there
+// is no release event). A program with SGR mouse tracking enabled reads it
+// as a real wheel event.
 func (c *ExecClient) SendMouseWheel(ctx context.Context, target string, up bool, x, y int) error {
 	_, err := c.run(ctx, "send-keys", "-l", "-t", target, "--", sgrWheel(up, x, y))
 	return err

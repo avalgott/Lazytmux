@@ -440,25 +440,36 @@ func (a *App) applyPreviewScrollLoad(seq int64, lines []string, paneH int, loadE
 	}
 	if noHistory {
 		name := a.previewScrollTarget
-		// The session's program keeps its own scrollback: it can only be
-		// scrolled from inside the session, where the wheel is forwarded.
-		// The hint is bound to the session ID so a same-name recreation
-		// cannot inherit a stale verdict, and its wording depends on
-		// whether scrolling inside is actually possible (alt screen with
-		// mouse tracking).
-		a.scrollHintName = name
-		a.scrollHintID = ""
-		if sess := a.currentSession(); sess != nil && sess.Name == name {
-			a.scrollHintID = sess.ID
-		}
-		a.scrollHintMsg = "No scrollback available."
-		if alt, sgr, _, _, ferr := a.svc.PaneInputFlags(context.Background(), name); ferr == nil && alt && sgr {
-			a.scrollHintMsg = scrollHintText
-		}
-		a.scrollHintUntil = time.Now().Add(scrollHintDuration)
-		a.setStatus(a.scrollHintMsg)
-		a.exitPreviewScroll()
+		// The pane-flags query can block for the client timeout: run it off
+		// the event loop and apply the hint back on it.
+		go func() {
+			alt, sgr, _, _, ferr := a.svc.PaneInputFlags(context.Background(), name)
+			a.g.Update(func(*gocui.Gui) error {
+				a.applyNoHistoryHint(name, alt, sgr, ferr != nil)
+				return nil
+			})
+		}()
 	}
+}
+
+// applyNoHistoryHint shows the no-scrollback hint for a session whose
+// program keeps its own scrollback. The hint is bound to the session ID so
+// a same-name recreation cannot inherit a stale verdict, and its wording
+// depends on whether scrolling inside is actually possible (alt screen
+// with SGR mouse tracking).
+func (a *App) applyNoHistoryHint(name string, alt, sgr, flagErr bool) {
+	a.scrollHintName = name
+	a.scrollHintID = ""
+	if sess := a.currentSession(); sess != nil && sess.Name == name {
+		a.scrollHintID = sess.ID
+	}
+	a.scrollHintMsg = "No scrollback available."
+	if !flagErr && alt && sgr {
+		a.scrollHintMsg = scrollHintText
+	}
+	a.scrollHintUntil = time.Now().Add(scrollHintDuration)
+	a.setStatus(a.scrollHintMsg)
+	a.exitPreviewScroll()
 }
 
 // scrollHintText is the friendly hint shown when a session has no scrollback
