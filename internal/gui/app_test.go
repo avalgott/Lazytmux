@@ -1373,7 +1373,7 @@ func TestCaptureCompletionFeedsBuffer(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.cursor = 0
 
-	app.renderPreviewCapture("devbox", 0, session.Preview{Content: "live", Full: "live\nstreamed"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "live", Full: "live\nstreamed"}, nil)
 
 	assert.Equal(t, []string{"live", "streamed"}, app.bufferFor("devbox").Snapshot())
 }
@@ -1390,7 +1390,7 @@ func TestScrollSnapshotFallsBackToBufferForAltScreenPane(t *testing.T) {
 
 	lines, paneH, err := app.fetchScrollSnapshot("devbox", 80)
 	require.NoError(t, err)
-	assert.Equal(t, 5, paneH, "pane height still reported for the noHistory check")
+	assert.Equal(t, 7, paneH, "the normalized screen height travels in the pane-height slot for the noHistory check")
 	assert.Equal(t, []string{"h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8"}, lines)
 }
 
@@ -1507,7 +1507,7 @@ func TestStaleCaptureForOldSessionNotRendered(t *testing.T) {
 	app.cursor = 0
 
 	// A capture for session-A (index 0) completes...
-	app.renderPreviewCapture("session-A", 0, p.captured, nil)
+	app.renderPreviewCapture("session-A", 0, app.sessionGen.Load(), p.captured, nil)
 
 	// ...after the list changed so index 0 now holds session-B.
 	app.sessions = []session.Info{{Name: "session-B"}}
@@ -1563,7 +1563,7 @@ func TestFailedCaptureRecordsSessionName(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.cursor = 0
 
-	app.renderPreviewCapture("devbox", 0, session.Preview{}, p.err)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{}, p.err)
 	app.preview.Lock()
 	name := app.preview.Name()
 	app.preview.Unlock()
@@ -1674,9 +1674,33 @@ func TestStaleCaptureDoesNotFeedBuffer(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.cursor = 0
 
-	// A capture for a session that is no longer in the list completes.
-	app.renderPreviewCapture("gone", 0, session.Preview{Full: "stale"}, nil)
+	// The capture started before a session refresh changed the world.
+	gen := app.sessionGen.Load()
+	app.sessionGen.Add(1)
+	app.renderPreviewCapture("gone", 0, gen, session.Preview{Full: "stale"}, nil)
 	assert.Nil(t, app.bufferLookup("gone"), "a stale capture must not recreate a vanished session's buffer")
+}
+
+func TestSyntheticHistorySurvivesApplierCheck(t *testing.T) {
+	p := &fakeProvider{paneHeight: 10}
+	app := newTestApp(t, p)
+	rows := make([]string, 9)
+	for i := range rows {
+		rows[i] = fmt.Sprintf("r%02d", i)
+	}
+	app.feedBuffer("devbox", screen(append(append([]string(nil), rows...), "")...))
+	scrolled := append(append([]string(nil), rows[1:]...), "r09", "")
+	app.feedBuffer("devbox", screen(scrolled...))
+
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(8, 78)
+	seq := app.previewScroll.seq
+	lines, paneH, err := app.fetchScrollSnapshot("devbox", 80)
+	require.NoError(t, err)
+	app.applyPreviewScrollLoad(seq, lines, paneH, nil)
+
+	assert.True(t, app.previewScroll.IsActive(), "the applier must accept synthetic history the fetch accepted")
+	assert.True(t, app.previewScroll.loaded)
 }
 
 // --- Copilot balanced-review follow-ups ---

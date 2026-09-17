@@ -82,6 +82,8 @@ type App struct {
 	attachTarget           string      // session to attach to; set on Enter, main() acts on it
 	buffers                map[string]*LineBuffer
 	buffersMu              sync.Mutex // guards the buffers map (LineBuffer locks itself)
+	sessionGen             atomic.Uint64
+
 	// scrollHint is the transient preview-title hint shown after a scroll
 	// attempt on a session that keeps its own scrollback (alternate-screen
 	// programs like Claude Code): "press Enter to open it and scroll inside".
@@ -259,6 +261,10 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 		selected = sess.Name
 	}
 	a.sessions = sessions
+	// Invalidate in-flight captures: they record the generation they started
+	// under, and any refresh means the session landscape may have changed
+	// (kill, rename, prune). Stale completions must not feed history.
+	a.sessionGen.Add(1)
 
 	// Drop synthetic scrollback buffers of sessions that no longer exist.
 	a.buffersMu.Lock()
@@ -429,18 +435,6 @@ func (a *App) bufferLookup(name string) *LineBuffer {
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
 	return a.buffers[name]
-}
-
-// hasSession reports whether the session is in the current list. Used to
-// discard capture completions that arrive after their session disappeared —
-// feeding them would recreate the vanished session's buffer.
-func (a *App) hasSession(name string) bool {
-	for _, s := range a.sessions {
-		if s.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // appendLog adds an entry to the log, trimming the oldest entries when the

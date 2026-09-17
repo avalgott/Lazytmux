@@ -83,9 +83,10 @@ func (a *App) renderPreview(v *gocui.View) {
 	if needFetch {
 		name := sess.Name
 		cursorSnapshot := a.cursor
+		gen := a.sessionGen.Load()
 		go func() {
 			result, err := a.svc.Capture(context.Background(), name, previewW, previewH)
-			a.renderPreviewCapture(name, cursorSnapshot, result, err)
+			a.renderPreviewCapture(name, cursorSnapshot, gen, result, err)
 		}()
 	}
 
@@ -108,7 +109,11 @@ func (a *App) renderPreview(v *gocui.View) {
 // cache and feeds the session's synthetic scrollback buffer. Split out from
 // the fetch goroutine so tests can drive it directly (headless mode never
 // runs gui.Update).
-func (a *App) renderPreviewCapture(name string, cursorSnapshot int, result session.Preview, err error) {
+//
+// The feed is gated on the session generation recorded when the capture
+// started: a refresh in between means the session may have vanished (or its
+// name been reused), so the stale completion must not feed history.
+func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, result session.Preview, err error) {
 	a.preview.Lock()
 	if err == nil {
 		a.preview.Update(name, result.Content, cursorSnapshot, result.CursorX, result.CursorY)
@@ -118,10 +123,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, result sessi
 		a.preview.MarkFetched(name, cursorSnapshot)
 	}
 	a.preview.Unlock()
-	// Only feed history for sessions that still exist: a capture completing
-	// after its session vanished would recreate the pruned buffer, and a
-	// later session reusing the name would inherit stale pane content.
-	if a.hasSession(name) {
+	if a.sessionGen.Load() == gen {
 		a.feedBuffer(name, result.Full)
 	}
 	a.g.Update(func(*gocui.Gui) error { return nil })
