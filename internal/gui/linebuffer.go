@@ -123,7 +123,16 @@ func (b *LineBuffer) update(scr []string) []string {
 			}
 		}
 		if o > 0 {
-			return capLines(append(b.lines, scr[o:]...), b.cap)
+			if o == len(scr) {
+				// The new screen lies entirely inside the old one: a
+				// re-framing of the same content — keep the buffer as is.
+				return capLines(b.lines, b.cap)
+			}
+			// A scroll in disguise — unless the new portion replays the
+			// dropped head (that is a rotation, handled by the replace).
+			if !majorityEqual(scr[o:], tail[:len(tail)-o]) {
+				return capLines(append(b.lines, scr[o:]...), b.cap)
+			}
 		}
 		prefix := b.lines[:len(b.lines)-prev]
 		// The largest suffix of the history prefix that equals the head of

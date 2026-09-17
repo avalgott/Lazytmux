@@ -213,12 +213,13 @@ func TestLineBufferShrinkReplacesOldScreen(t *testing.T) {
 	b.Feed(screen("a", "b"))
 	assert.Equal(t, []string{"a", "b"}, b.Snapshot(), "shrinkage must not manufacture duplicate history")
 
-	// With accumulated history, the history prefix survives the shrink.
+	// A shrink that reframes the same content keeps the buffer intact —
+	// the scrolled-off rows are history now, not garbage.
 	b2 := NewLineBuffer(100)
 	b2.Feed(screen("s1", "s2", "s3", "s4"))
 	b2.Feed(screen("s2", "s3", "s4", "s5"))
 	b2.Feed(screen("s4", "s5"))
-	assert.Equal(t, []string{"s1", "s4", "s5"}, b2.Snapshot())
+	assert.Equal(t, []string{"s1", "s2", "s3", "s4", "s5"}, b2.Snapshot())
 }
 
 func TestLineBufferRepeatedLineScrollAccumulates(t *testing.T) {
