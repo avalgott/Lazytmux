@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/jesseduffield/gocui"
@@ -428,10 +429,23 @@ func (a *App) applyPreviewScrollLoad(seq int64, lines []string, paneH int, loadE
 	}
 	if noHistory {
 		name := a.previewScrollTarget
-		a.setStatus(fmt.Sprintf("No scrollback for %q", name))
+		// The session's program keeps its own scrollback: it can only be
+		// scrolled from inside the session, where the wheel is forwarded.
+		a.scrollHintName = name
+		a.scrollHintUntil = time.Now().Add(scrollHintDuration)
+		a.setStatus(scrollHintText)
 		a.exitPreviewScroll()
 	}
 }
+
+// scrollHintText is the friendly hint shown when a session has no scrollback
+// to browse (its program keeps its own). Used in the log and the preview
+// title.
+const scrollHintText = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
+
+// scrollHintDuration is how long the preview title shows the scroll hint
+// after a scroll attempt on a session without scrollback.
+const scrollHintDuration = 4 * time.Second
 
 // previewScrollMove scrolls the dashboard preview snapshot by delta lines
 // (positive = towards newer content). The first gesture enters the mode;

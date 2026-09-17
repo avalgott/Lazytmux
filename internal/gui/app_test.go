@@ -1269,7 +1269,7 @@ func TestPreviewScrollZeroHistoryExitsWithStatus(t *testing.T) {
 	assert.False(t, app.previewScroll.IsActive())
 	assert.Equal(t, "", app.previewScrollTarget)
 	require.NotEmpty(t, app.logs)
-	assert.Contains(t, app.logs[len(app.logs)-1].msg, `No scrollback for "devbox"`)
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "No scrollback available. Hit Enter to open the session and scrollback inside of it.")
 }
 
 // --- Wheel passthrough for mouse-tracking panes in fullscreen ---
@@ -1316,14 +1316,14 @@ func TestFullscreenWheelFallsBackOnFlagError(t *testing.T) {
 
 func TestLogsDedupeConsecutiveMessages(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
-	app.setStatus("No scrollback for \"devbox\"")
-	app.setStatus("No scrollback for \"devbox\"")
+	app.setStatus("No scrollback available. Hit Enter to open the session and scrollback inside of it.")
+	app.setStatus("No scrollback available. Hit Enter to open the session and scrollback inside of it.")
 	assert.Len(t, app.logs, 1, "consecutive identical messages collapse into one")
 
-	app.setStatus("No scrollback for \"other\"")
+	app.setStatus("No scrollback available. Hit Enter to open the session and scrollback inside of it. other")
 	assert.Len(t, app.logs, 2, "a different message appends")
 
-	app.setError("No scrollback for \"other\"")
+	app.setError("No scrollback available. Hit Enter to open the session and scrollback inside of it. other")
 	assert.Len(t, app.logs, 3, "same text with a different kind is kept separate")
 }
 
@@ -1433,4 +1433,58 @@ func TestScrollSnapshotConcurrentWithFeeds(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// --- Scroll hint for sessions that keep their own scrollback ---
+
+func TestPreviewScrollZeroHistorySetsScrollHint(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	seq := app.previewScroll.seq
+
+	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	assert.False(t, app.previewScroll.IsActive())
+	assert.Equal(t, "devbox", app.scrollHintName)
+	assert.True(t, app.scrollHintUntil.After(time.Now()), "the hint is transient, starting now")
+}
+
+func TestPreviewTitleShowsScrollHint(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+	app.scrollHintName = "devbox"
+	app.scrollHintUntil = time.Now().Add(time.Minute)
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.Contains(t, v.Title, "Hit Enter to open the session")
+}
+
+func TestPreviewTitleHintExpires(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+	app.scrollHintName = "devbox"
+	app.scrollHintUntil = time.Now().Add(-time.Second)
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.NotContains(t, v.Title, "Hit Enter to open the session", "an expired hint must not linger")
+}
+
+func TestPreviewTitleHintWrongSession(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+	app.scrollHintName = "other"
+	app.scrollHintUntil = time.Now().Add(time.Minute)
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.NotContains(t, v.Title, "Hit Enter to open the session", "the hint belongs to its own session only")
 }

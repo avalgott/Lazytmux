@@ -82,6 +82,11 @@ type App struct {
 	attachTarget           string      // session to attach to; set on Enter, main() acts on it
 	buffers                map[string]*LineBuffer
 	buffersMu              sync.Mutex // guards the buffers map (LineBuffer locks itself)
+	// scrollHint is the transient preview-title hint shown after a scroll
+	// attempt on a session that keeps its own scrollback (alternate-screen
+	// programs like Claude Code): "press Enter to open it and scroll inside".
+	scrollHintName  string
+	scrollHintUntil time.Time
 }
 
 // logEntry is one line in the logs panel.

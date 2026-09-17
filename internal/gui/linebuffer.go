@@ -10,10 +10,9 @@ import (
 // diffs the new screen against the tail: scrolled-in lines are appended,
 // in-place repaints update the tail, full redraws replace it.
 type LineBuffer struct {
-	mu      sync.Mutex
-	lines   []string
-	cap     int
-	screenH int // last observed screen height (tail window)
+	mu    sync.Mutex
+	lines []string
+	cap   int
 }
 
 // NewLineBuffer creates a buffer that keeps at most cap lines.
@@ -53,7 +52,6 @@ func (b *LineBuffer) update(scr []string) []string {
 		scr = scr[:len(scr)-1]
 	}
 	n := len(scr)
-	b.screenH = n
 	if len(b.lines) == 0 {
 		return scr
 	}

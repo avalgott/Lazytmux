@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jesseduffield/gocui"
 
@@ -44,6 +45,11 @@ func (a *App) renderPreview(v *gocui.View) {
 	}
 
 	v.Title = fmt.Sprintf(" %s ", sess.Name)
+	// A recent scroll attempt on a session without scrollback explains
+	// itself in the title for a few seconds (the log keeps a record too).
+	if a.scrollHintName == sess.Name && time.Now().Before(a.scrollHintUntil) {
+		v.Title = " " + scrollHintText + " "
+	}
 
 	previewW := v.InnerWidth()
 	previewH := v.InnerHeight()

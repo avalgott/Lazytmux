@@ -118,7 +118,7 @@ Inside fullscreen, `Ctrl+V` (or the mouse wheel) switches to scrollback browsing
 | mouse wheel | Scroll (enters scroll mode if not active) |
 | `Esc` / `q` / `Ctrl+V` | Back to the live view |
 
-Full-screen programs that use the alternate screen (Claude Code, vim, less, htop, …) keep no tmux scrollback history, so there is nothing for lazytmux to browse. Over such a pane the mouse wheel is forwarded to the program itself, which scrolls its own history, and `Ctrl+V` shows a `no scrollback` hint in the status bar. The dashboard preview logs `No scrollback for <session>` instead of entering scroll mode.
+Full-screen programs that use the alternate screen (Claude Code, vim, less, htop, …) keep no tmux scrollback history, so tmux has nothing for lazytmux to browse. While such a session is selected on the dashboard (or open in fullscreen), lazytmux accumulates its own captures of the pane — up to 400 lines per session — and scroll mode browses that synthetic scrollback instead. Content that appears and disappears between captures, or while the session is not being observed, is not retained: scrolling a session whose program is idle shows a hint to press `Enter` and scroll inside it instead, where the wheel is forwarded to the program and scrolls its own history.
 
 If the session dies while you are in it (e.g. the shell exits after `Ctrl+O`), lazytmux returns to the dashboard automatically.
 
