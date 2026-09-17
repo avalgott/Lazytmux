@@ -483,7 +483,14 @@ func (a *App) decideFullscreenWheel(target string, fsGen, wGen, sGen uint64, del
 		if hasPos {
 			cx, cy = x, y
 		}
-		ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy)
+		// Send to the VALIDATED pane ID, not the session name: a tmux-side
+		// pane switch between the flags query and the send would otherwise
+		// redirect the injection into the successor pane.
+		sendTarget := target
+		if paneID != "" {
+			sendTarget = paneID
+		}
+		ferr := a.svc.ForwardMouseWheel(context.Background(), sendTarget, delta < 0, cx, cy)
 		if ferr == nil {
 			return wheelForwarded, nil
 		}

@@ -2632,3 +2632,30 @@ func TestWheelForwardIgnoredOnPaneChange(t *testing.T) {
 	assert.Equal(t, wheelIgnored, d)
 	assert.Empty(t, p.wheelSnapshot(), "input meant for one pane must not reach its successor")
 }
+
+// --- Copilot round-33 fixes ---
+
+func TestUnboundBufferKeptWhenUnrelatedSessionChanges(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}}, nil)
+	app.feedBuffer("devbox", "live-output")
+
+	// An unrelated session appears: the global generation advances, but
+	// devbox's identity did not — its buffer must survive.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}, {Name: "other", ID: "$9"}}, nil)
+	assert.NotNil(t, app.bufferLookup("devbox"), "an unrelated session change must not drop this session's history")
+}
+
+func TestWheelForwardTargetsReturnedPane(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5"}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%5"}, nil)
+
+	d, err := app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), app.wheelGen.Load(), app.sessionGen.Load(), -3, 0, 0, false)
+	require.NoError(t, err)
+	assert.Equal(t, wheelForwarded, d)
+	require.Len(t, p.wheelSnapshot(), 1)
+	assert.Equal(t, "%5", p.wheelSnapshot()[0].name, "the forward must target the validated pane ID, not the session name")
+}

@@ -90,7 +90,9 @@ type App struct {
 	attachTarget           string      // session to attach to; set on Enter, main() acts on it
 	buffers                map[string]*LineBuffer
 	bufferIDs              map[string]string // buffer name -> "ID@Created@PID" identity it belongs to
+	bufferIdentities       map[string]string // buffer name -> the session identity it was fed under
 	paneIDs                map[string]string // session name -> the active pane the buffer/preview belong to
+	sessionIdentities      map[string]string // session name -> identity, updated every refresh
 	bufferGens             map[string]uint64 // generation the buffer was last fed under
 	buffersMu              sync.Mutex        // guards the buffers map (LineBuffer locks itself)
 	sessionGen             atomic.Uint64
@@ -146,18 +148,20 @@ func NewAppHeadless(svc session.Provider, width, height int) (*App, error) {
 
 func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 	app := &App{
-		g:             g,
-		svc:           svc,
-		preview:       &PreviewCache{},
-		fullscreen:    &FullScreenState{},
-		scroll:        &ScrollState{},
-		previewScroll: &ScrollState{},
-		buffers:       make(map[string]*LineBuffer),
-		bufferIDs:     make(map[string]string),
-		bufferGens:    make(map[string]uint64),
-		paneIDs:       make(map[string]string),
-		wheelQueue:    make(chan wheelTask, 64),
-		quitCh:        make(chan struct{}),
+		g:                 g,
+		svc:               svc,
+		preview:           &PreviewCache{},
+		fullscreen:        &FullScreenState{},
+		scroll:            &ScrollState{},
+		previewScroll:     &ScrollState{},
+		buffers:           make(map[string]*LineBuffer),
+		bufferIDs:         make(map[string]string),
+		bufferGens:        make(map[string]uint64),
+		bufferIdentities:  make(map[string]string),
+		paneIDs:           make(map[string]string),
+		sessionIdentities: make(map[string]string),
+		wheelQueue:        make(chan wheelTask, 64),
+		quitCh:            make(chan struct{}),
 	}
 
 	g.Highlight = true
@@ -331,15 +335,17 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 				// generation — otherwise it holds the previous
 				// incarnation's output and is dropped.
 				identity := sessionIdentity(s)
+				// A bound buffer belongs to a dead incarnation when its
+				// identity changed. An UNBOUND buffer is dropped only when
+				// THIS session's identity changed since the feed — an
+				// unrelated session appearing or vanishing must not destroy
+				// the selected session's history.
 				if (a.bufferIDs[name] != "" && a.bufferIDs[name] != identity) ||
-					(a.bufferIDs[name] == "" && a.bufferGens[name] != a.sessionGen.Load()) {
-					// The buffer belongs to a dead incarnation: drop it and
-					// ALL of its metadata — a lingering binding would grow
-					// the maps unboundedly across recreate/remove cycles,
-					// and a fresh buffer starts unbound anyway.
+					(a.bufferIDs[name] == "" && a.bufferIdentities[name] != "" && a.bufferIdentities[name] != identity) {
 					delete(a.buffers, name)
 					delete(a.bufferIDs, name)
 					delete(a.bufferGens, name)
+					delete(a.bufferIdentities, name)
 				} else {
 					a.bufferIDs[name] = identity
 				}
@@ -350,8 +356,14 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 			delete(a.buffers, name)
 			delete(a.bufferIDs, name)
 			delete(a.bufferGens, name)
+			delete(a.bufferIdentities, name)
 			delete(a.paneIDs, name)
 		}
+	}
+	// Record every live session's identity, so feeds can bind themselves to
+	// it (the capture goroutine cannot read the session list).
+	for _, s := range a.sessions {
+		a.sessionIdentities[s.Name] = sessionIdentity(s)
 	}
 	a.buffersMu.Unlock()
 	a.fsMu.Unlock()
@@ -527,10 +539,12 @@ func (a *App) feedBufferLocked(name, content string) {
 	}
 	b := a.buffers[name]
 	if b == nil {
-		// A fresh buffer starts unbound: any lingering binding from a
-		// previous incarnation would otherwise get the buffer deleted on
-		// the next refresh.
+		// A fresh buffer starts unbound, bound to the session identity the
+		// last refresh observed — any lingering binding from a previous
+		// incarnation would otherwise get the buffer deleted on the next
+		// refresh.
 		delete(a.bufferIDs, name)
+		a.bufferIdentities[name] = a.sessionIdentities[name]
 		b = NewLineBuffer(scrollBufferCap)
 		a.buffers[name] = b
 	}
