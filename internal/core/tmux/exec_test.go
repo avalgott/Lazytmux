@@ -248,9 +248,11 @@ func TestParseInputFlags(t *testing.T) {
 		cx, cy  int
 		wantErr bool
 	}{
-		{name: "alt screen with mouse", in: "1 1 12 34", alt: true, mouse: true, cx: 12, cy: 34},
-		{name: "plain pane", in: "0 0 0 0", alt: false, mouse: false, cx: 0, cy: 0},
-		{name: "alt without mouse", in: "1 0 5 9", alt: true, mouse: false, cx: 5, cy: 9},
+		{name: "alt screen with SGR mouse", in: "1 1 1 12 34", alt: true, mouse: true, cx: 12, cy: 34},
+		{name: "plain pane", in: "0 0 0 0 0", alt: false, mouse: false, cx: 0, cy: 0},
+		{name: "alt without any mouse", in: "1 0 0 5 9", alt: true, mouse: false, cx: 5, cy: 9},
+		{name: "SGR encoding without tracking", in: "1 0 1 5 9", alt: true, mouse: false, cx: 5, cy: 9},
+		{name: "tracking without SGR encoding", in: "1 1 0 5 9", alt: true, mouse: false, cx: 5, cy: 9},
 		{name: "empty", in: "", wantErr: true},
 		{name: "too few fields", in: "1 1", wantErr: true},
 		{name: "non-numeric", in: "x 1 2 3", wantErr: true},

@@ -418,14 +418,14 @@ func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) 
 }
 
 // PaneInputFlags reports the pane's input mode in one display-message call:
-// whether the alternate screen is active, whether the program has SGR (1006)
-// mouse tracking enabled — the only encoding SendMouseWheel emits — and the
-// pane cursor position (0-based). The format is the positional argument,
-// matching ShowMessage — display-message expands format variables there on
-// every tmux version.
+// whether the alternate screen is active, whether the program has mouse
+// tracking enabled with the SGR (1006) encoding — the only encoding
+// SendMouseWheel emits — and the pane cursor position (0-based). The format
+// is the positional argument, matching ShowMessage — display-message expands
+// format variables there on every tmux version.
 func (c *ExecClient) PaneInputFlags(ctx context.Context, target string) (bool, bool, int, int, error) {
 	out, err := c.run(ctx, "display-message", "-t", target, "-p",
-		"#{alternate_on} #{mouse_sgr_flag} #{cursor_x} #{cursor_y}")
+		"#{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{cursor_x} #{cursor_y}")
 	if err != nil {
 		return false, false, 0, 0, err
 	}
@@ -458,13 +458,17 @@ func splitPaneHeightLine(out string) (string, int, error) {
 }
 
 // parseInputFlags parses the display-message output of
-// "#{alternate_on} #{mouse_any_flag} #{cursor_x} #{cursor_y}".
-func parseInputFlags(s string) (altOn, mouseAny bool, cx, cy int, err error) {
+// "#{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{cursor_x} #{cursor_y}".
+// The mouse result is true only when a tracking mode is enabled AND the SGR
+// (1006) encoding is selected — SGR alone leaves a program that is not
+// listening for mouse events, and any other encoding would not understand
+// the SGR sequences SendMouseWheel emits.
+func parseInputFlags(s string) (altOn, mouseSGR bool, cx, cy int, err error) {
 	fields := strings.Fields(s)
-	if len(fields) != 4 {
+	if len(fields) != 5 {
 		return false, false, 0, 0, fmt.Errorf("unexpected input flags %q", s)
 	}
-	var nums [4]int
+	var nums [5]int
 	for i, f := range fields {
 		n, e := strconv.Atoi(f)
 		if e != nil {
@@ -472,7 +476,7 @@ func parseInputFlags(s string) (altOn, mouseAny bool, cx, cy int, err error) {
 		}
 		nums[i] = n
 	}
-	return nums[0] == 1, nums[1] == 1, nums[2], nums[3], nil
+	return nums[0] == 1, nums[1] == 1 && nums[2] == 1, nums[3], nums[4], nil
 }
 
 // sgrWheelPair builds the SGR mouse escape sequences for one wheel click:
