@@ -115,15 +115,19 @@ func (a *App) renderPreview(v *gocui.View) {
 // started: a refresh in between means the session may have vanished (or its
 // name been reused), so the stale completion must not feed history.
 func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, result session.Preview, err error) {
-	// The active pane of a session can change (pane switch, respawn): the
-	// synthetic buffer and the cached screen belong to a specific pane, so
-	// a change resets them before the new pane's content lands.
-	paneChanged := a.recordPane(name, result.PaneID)
-	a.preview.Lock()
-	if paneChanged {
-		a.preview.ClearContent()
+	// The generation check and the pane recording are atomic under fsMu —
+	// the refresh (which prunes pane metadata) holds the same lock, so a
+	// stale capture cannot repopulate paneIDs for a removed session. Failed
+	// captures record nothing: their pane identity is meaningless.
+	a.fsMu.Lock()
+	genOK := a.sessionGen.Load() == gen
+	var paneChanged bool
+	if genOK && err == nil {
+		paneChanged = a.recordPaneLocked(name, result.PaneID)
 	}
-	if a.sessionGen.Load() != gen {
+	a.fsMu.Unlock()
+	a.preview.Lock()
+	if !genOK {
 		// A refresh changed the session landscape while this capture was in
 		// flight: discard the result and the old cache alike, and let the
 		// render loop start a fresh capture (marking fetched throttles the
@@ -135,6 +139,9 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 		a.g.Update(func(*gocui.Gui) error { return nil })
 		return
 	}
+	if paneChanged {
+		a.preview.ClearContent()
+	}
 	if err == nil {
 		a.preview.Update(name, result.Content, gen, cursorSnapshot, result.CursorX, result.CursorY)
 	} else {
@@ -143,20 +150,20 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 		a.preview.MarkFetched(name, gen, cursorSnapshot)
 	}
 	a.preview.Unlock()
-	a.feedBufferIfCurrent(name, gen, result.Full)
+	if err == nil {
+		a.feedBufferIfCurrent(name, gen, result.Full)
+	}
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }
 
-// recordPane binds a session to the pane its capture came from. Returns
-// true when the active pane changed (the previous pane's buffer is dropped).
-// Serialized with the wheel forward via fsMu, so a pane change can never
-// race an injection into the wrong pane.
-func (a *App) recordPane(name, paneID string) (changed bool) {
+// recordPaneLocked binds a session to the pane its capture came from.
+// Returns true when the active pane changed (the previous pane's buffer is
+// dropped). The caller holds fsMu; buffersMu is taken inside — the same
+// order the refresh uses.
+func (a *App) recordPaneLocked(name, paneID string) (changed bool) {
 	if paneID == "" {
 		return false
 	}
-	a.fsMu.Lock()
-	defer a.fsMu.Unlock()
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
 	if a.paneIDs[name] != "" && a.paneIDs[name] != paneID {

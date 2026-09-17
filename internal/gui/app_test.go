@@ -1511,7 +1511,7 @@ func TestPreviewTitleHintExpires(t *testing.T) {
 	app.cursor = 0
 	app.scrollHintName = "devbox"
 	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
-	app.scrollHintIdent = "devbox@0"
+	app.scrollHintIdent = sessionIdentity(app.sessions[0])
 	app.scrollHintUntil = time.Now().Add(-time.Second)
 
 	require.NoError(t, app.layout(app.g))
@@ -2658,4 +2658,19 @@ func TestWheelForwardTargetsReturnedPane(t *testing.T) {
 	assert.Equal(t, wheelForwarded, d)
 	require.Len(t, p.wheelSnapshot(), 1)
 	assert.Equal(t, "%5", p.wheelSnapshot()[0].name, "the forward must target the validated pane ID, not the session name")
+}
+
+// --- Copilot round-34 fixes ---
+
+func TestStaleCaptureDoesNotRecordPane(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	gen := app.sessionGen.Load()
+	app.sessionGen.Add(1) // the session changed while the capture was in flight
+
+	app.renderPreviewCapture("devbox", 0, gen, session.Preview{Content: "P", Full: "P", PaneID: "%9"}, nil)
+	app.buffersMu.Lock()
+	_, recorded := app.paneIDs["devbox"]
+	app.buffersMu.Unlock()
+	assert.False(t, recorded, "a stale capture must not repopulate pane metadata")
 }
