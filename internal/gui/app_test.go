@@ -2824,11 +2824,14 @@ func TestStalePaneFeedSkipped(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
 	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
 
-	// The active pane changed; the in-flight capture for the old pane lands.
+	// The active pane changed; the in-flight capture for the old pane lands
+	// (the newer binding carries a higher capture sequence).
 	app.buffersMu.Lock()
 	app.paneIDs["devbox"] = "%2"
+	app.paneSeq["devbox"] = 1
 	app.buffersMu.Unlock()
 	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "Q", Full: "old-pane-history", PaneID: "%1"}, nil)
 
-	assert.Nil(t, app.bufferLookup("devbox"), "the old pane's feed must not create a buffer under the new pane")
+	snap := app.bufferFor("devbox").Snapshot()
+	assert.Equal(t, []string{"P"}, snap, "the old pane's feed must not land after the pane changed")
 }
