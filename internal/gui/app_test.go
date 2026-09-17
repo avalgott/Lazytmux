@@ -33,6 +33,7 @@ type fakeProvider struct {
 	paneHeight   int                 // value returned by PaneHeight
 	altOn        bool                // value returned by PaneInputFlags
 	mouseAny     bool
+	wheelErr     error               // error for ForwardMouseWheel only
 	cursorX      int
 	cursorY      int
 	wheels       []wheelCall // recorded ForwardMouseWheel calls
@@ -107,6 +108,9 @@ func (f *fakeProvider) ForwardMouseWheel(_ context.Context, name string, up bool
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.wheels = append(f.wheels, wheelCall{name: name, up: up, x: x, y: y})
+	if f.wheelErr != nil {
+		return f.wheelErr
+	}
 	return f.err
 }
 
@@ -1673,4 +1677,34 @@ func TestStaleCaptureDoesNotFeedBuffer(t *testing.T) {
 	// A capture for a session that is no longer in the list completes.
 	app.renderPreviewCapture("gone", 0, session.Preview{Full: "stale"}, nil)
 	assert.Nil(t, app.bufferLookup("gone"), "a stale capture must not recreate a vanished session's buffer")
+}
+
+// --- Copilot balanced-review follow-ups ---
+
+func TestTopThenDownExitsWhileLoading(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	app.focusMain = true
+	// g while loading: pendingTop, offset pinned at zero.
+	app.previewScrollTop()
+	assert.True(t, app.previewScroll.IsActive())
+
+	// A quick j is a downward gesture at the bottom: return to live.
+	require.NoError(t, app.cursorMoveHandler(1)(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive(), "g then j while loading must not freeze the preview at the bottom")
+}
+
+func TestFullscreenWheelForwardFailureFallsBackToScrollMode(t *testing.T) {
+	p := &fakeProvider{altOn: true, mouseAny: true}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+	// Make the wheel forward fail while the flags query still succeeds.
+	p.wheelErr = assert.AnError
+
+	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
+	assert.True(t, app.scroll.IsActive(), "a failed forward must fall back to scroll mode, not vanish")
 }

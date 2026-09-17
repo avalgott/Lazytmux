@@ -365,10 +365,13 @@ func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 			target := a.fullscreen.Target()
 			alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
 			if err == nil && alt && mouse {
-				if ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy); ferr != nil {
+				if ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy); ferr == nil {
+					return nil
+				} else {
+					// A failed forward (dead pane, tmux error) must not be a
+					// silent no-op: fall back to lazytmux scroll mode.
 					a.setError(fmt.Sprintf("forward wheel: %v", ferr))
 				}
-				return nil
 			}
 			// Wheel-down at the live bottom has nothing to browse; entering
 			// would start a whole-history load that pins at the bottom.
