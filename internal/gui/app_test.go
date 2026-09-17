@@ -2845,3 +2845,35 @@ func TestTabAppliesFocusImmediately(t *testing.T) {
 	require.NoError(t, app.cycleFocusHandler(app.g, nil))
 	assert.Equal(t, "main", app.g.CurrentView().Name(), "the view focus must follow the toggle before any redraw")
 }
+
+// --- Copilot round-42 fixes ---
+
+func TestPreviewLoadDiscardedWhenNewerPaneBinding(t *testing.T) {
+	p := &fakeProvider{paneHeight: 5, scrollbackPaneID: "%1"}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 1, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+
+	// A newer live capture rebinds the pane while the scroll fetch is in
+	// flight; the fetched snapshot still sees the old pane.
+	app.buffersMu.Lock()
+	app.paneIDs["devbox"] = "%2"
+	app.paneSeq["devbox"] = 2
+	app.buffersMu.Unlock()
+
+	app.previewScrollTarget = "devbox"
+	app.previewScrollTargetID = sessionIdentity(app.sessions[0])
+	app.previewScroll.Enter(20, 78)
+	seq := app.previewScroll.seq
+	p.mu.Lock()
+	n0 := len(p.scrollRanges)
+	p.mu.Unlock()
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), "%1", "%1", make([]string, 25), 5, nil)
+
+	assert.False(t, app.previewScroll.loaded, "the stale pane's snapshot must not install")
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.scrollRanges) > n0
+	}, time.Second, 10*time.Millisecond, "the load must restart under the newer binding")
+}

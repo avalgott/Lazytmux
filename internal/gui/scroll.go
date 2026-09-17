@@ -249,6 +249,16 @@ func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID, fetchRecorded stri
 		}
 		return
 	}
+	// The pane must be settled BEFORE the snapshot installs: if a newer live
+	// capture owns the pane, this snapshot is stale and the load restarts.
+	if !a.paneMatches(a.fullscreen.Target(), paneID) {
+		if !a.adoptPaneIfStale(a.fullscreen.Target(), fetchRecorded, paneID) {
+			if a.scroll.IsActive() && a.scroll.seq == seq {
+				a.restartScrollLoad()
+			}
+			return
+		}
+	}
 	applied, noHistory, err := a.applyScrollLoadState(a.scroll, seq, lines, paneH, loadErr)
 	if err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))
@@ -257,14 +267,6 @@ func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID, fetchRecorded stri
 	}
 	if !applied {
 		return // superseded or the mode already exited — leave the hint alone
-	}
-	// The freshly captured tmux snapshot is authoritative for its pane: a
-	// pane switch just before scrolling must rebind the session to it, not
-	// reject the load forever (no live captures run while browsing). Only
-	// the CURRENT load may rebind — a stale one must not touch the new
-	// target's pane or buffer.
-	if !a.paneMatches(a.fullscreen.Target(), paneID) {
-		a.adoptPaneIfStale(a.fullscreen.Target(), fetchRecorded, paneID)
 	}
 	if noHistory {
 		a.fullscreenNoScrollback = true
@@ -357,16 +359,16 @@ func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, stri
 // fetch time. A concurrent live capture that recorded a NEWER pane in
 // between wins: the stale snapshot must not overwrite it or drop its
 // buffer. The check and the adoption are one critical section.
-func (a *App) adoptPaneIfStale(name, fetchRecorded, paneID string) {
+func (a *App) adoptPaneIfStale(name, fetchRecorded, paneID string) bool {
 	if paneID == "" {
-		return
+		return true
 	}
 	a.fsMu.Lock()
 	defer a.fsMu.Unlock()
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
 	if a.paneIDs[name] != fetchRecorded {
-		return // a newer capture rebound the pane — this snapshot is stale
+		return false // a newer capture rebound the pane — this snapshot is stale
 	}
 	if fetchRecorded != "" {
 		delete(a.buffers, name)
@@ -374,6 +376,7 @@ func (a *App) adoptPaneIfStale(name, fetchRecorded, paneID string) {
 		delete(a.bufferGens, name)
 	}
 	a.paneIDs[name] = paneID
+	return true
 }
 
 // paneMatches reports whether the pane a scrollback capture came from is the
@@ -526,6 +529,16 @@ func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID, fetchRecord
 		}
 		return
 	}
+	// The pane must be settled BEFORE the snapshot installs: if a newer live
+	// capture owns the pane, this snapshot is stale and the load restarts.
+	if !a.paneMatches(a.previewScrollTarget, paneID) {
+		if !a.adoptPaneIfStale(a.previewScrollTarget, fetchRecorded, paneID) {
+			if a.previewScroll.IsActive() && a.previewScroll.seq == seq {
+				a.restartPreviewScrollLoad()
+			}
+			return
+		}
+	}
 	applied, noHistory, err := a.applyScrollLoadState(a.previewScroll, seq, lines, paneH, loadErr)
 	if err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))
@@ -534,14 +547,6 @@ func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID, fetchRecord
 	}
 	if !applied {
 		return // superseded or the mode already exited
-	}
-	// The freshly captured tmux snapshot is authoritative for its pane: a
-	// pane switch just before scrolling must rebind the session to it, not
-	// reject the load forever (no live captures run while browsing). Only
-	// the CURRENT load may rebind — a stale one must not touch the new
-	// target's pane or buffer.
-	if !a.paneMatches(a.previewScrollTarget, paneID) {
-		a.adoptPaneIfStale(a.previewScrollTarget, fetchRecorded, paneID)
 	}
 	if noHistory {
 		name := a.previewScrollTarget
