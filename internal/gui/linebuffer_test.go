@@ -1,7 +1,9 @@
 package gui
 
 import (
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -180,4 +182,25 @@ func TestLineBufferIdleFeedIsNoop(t *testing.T) {
 	b.Feed(screen("a", "b", "c"))
 	b.Feed(screen("a", "b", "c")) // byte-identical: nothing to do
 	assert.Equal(t, []string{"a", "b", "c"}, b.Snapshot())
+}
+
+func TestSnapshotWithHeightIsConsistentUnderFeeds(t *testing.T) {
+	b := NewLineBuffer(400)
+	b.Feed(screen("a", "b", "c"))
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 30; j++ {
+				b.Feed(fmt.Sprintf("g%d-%d-a\ng%d-%d-b\ng%d-%d-c", i, j, i, j, i, j))
+				snap, h := b.SnapshotWithHeight()
+				if len(snap) < h {
+					t.Errorf("inconsistent pair: %d lines with screen height %d", len(snap), h)
+					return
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
 }

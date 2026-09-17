@@ -304,8 +304,8 @@ func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, erro
 	// The normalized height is what the applier's noHistory check compares
 	// against, so it must travel in the pane-height slot.
 	if b := a.bufferLookup(target); b != nil {
-		if snap := b.Snapshot(); len(snap) > b.ScreenHeight() {
-			return truncateLines(snap, width), b.ScreenHeight(), nil
+		if snap, screenH := b.SnapshotWithHeight(); len(snap) > screenH {
+			return truncateLines(snap, width), screenH, nil
 		}
 	}
 	return lines, preview.PaneHeight, nil // nothing to browse — hint path

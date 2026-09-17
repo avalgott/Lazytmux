@@ -50,17 +50,18 @@ func (b *LineBuffer) Feed(content string) {
 
 // Snapshot returns a copy of the buffered lines, oldest first.
 func (b *LineBuffer) Snapshot() []string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return append([]string(nil), b.lines...)
+	lines, _ := b.SnapshotWithHeight()
+	return lines
 }
 
-// ScreenHeight returns the normalized height of the current screen (the
-// live portion of the buffer). Lines beyond it are accumulated history.
-func (b *LineBuffer) ScreenHeight() int {
+// SnapshotWithHeight returns the buffered lines and the current screen's
+// normalized height (the live portion of the buffer; lines beyond it are
+// accumulated history) under one lock, so callers never pair a snapshot
+// with a screen height from a different moment.
+func (b *LineBuffer) SnapshotWithHeight() ([]string, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.screenH
+	return append([]string(nil), b.lines...), b.screenH
 }
 
 // update applies the diff-append algorithm. The caller holds the lock.
