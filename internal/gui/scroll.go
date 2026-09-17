@@ -443,14 +443,20 @@ func (a *App) applyPreviewScrollLoad(seq int64, lines []string, paneH int, loadE
 		// The session's program keeps its own scrollback: it can only be
 		// scrolled from inside the session, where the wheel is forwarded.
 		// The hint is bound to the session ID so a same-name recreation
-		// cannot inherit a stale verdict.
+		// cannot inherit a stale verdict, and its wording depends on
+		// whether scrolling inside is actually possible (alt screen with
+		// mouse tracking).
 		a.scrollHintName = name
 		a.scrollHintID = ""
 		if sess := a.currentSession(); sess != nil && sess.Name == name {
 			a.scrollHintID = sess.ID
 		}
+		a.scrollHintMsg = "No scrollback available."
+		if alt, sgr, _, _, ferr := a.svc.PaneInputFlags(context.Background(), name); ferr == nil && alt && sgr {
+			a.scrollHintMsg = scrollHintText
+		}
 		a.scrollHintUntil = time.Now().Add(scrollHintDuration)
-		a.setStatus(scrollHintText)
+		a.setStatus(a.scrollHintMsg)
 		a.exitPreviewScroll()
 	}
 }

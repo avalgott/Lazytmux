@@ -1273,7 +1273,7 @@ func TestPreviewScrollZeroHistoryExitsWithStatus(t *testing.T) {
 	assert.False(t, app.previewScroll.IsActive())
 	assert.Equal(t, "", app.previewScrollTarget)
 	require.NotEmpty(t, app.logs)
-	assert.Contains(t, app.logs[len(app.logs)-1].msg, "No scrollback available. Hit Enter to open the session and scrollback inside of it.")
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "No scrollback available.")
 }
 
 // --- Wheel passthrough for mouse-tracking panes in fullscreen ---
@@ -1464,6 +1464,7 @@ func TestPreviewTitleShowsScrollHint(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.cursor = 0
 	app.scrollHintName = "devbox"
+	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
 	app.scrollHintUntil = time.Now().Add(time.Minute)
 
 	require.NoError(t, app.layout(app.g))
@@ -1477,6 +1478,7 @@ func TestPreviewTitleHintExpires(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.cursor = 0
 	app.scrollHintName = "devbox"
+	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
 	app.scrollHintUntil = time.Now().Add(-time.Second)
 
 	require.NoError(t, app.layout(app.g))
@@ -1490,6 +1492,7 @@ func TestPreviewTitleHintWrongSession(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.cursor = 0
 	app.scrollHintName = "other"
+	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
 	app.scrollHintUntil = time.Now().Add(time.Minute)
 
 	require.NoError(t, app.layout(app.g))
@@ -1829,6 +1832,7 @@ func TestScrollHintBoundToSessionID(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox", ID: "$2"}}
 	app.cursor = 0
 	app.scrollHintName = "devbox"
+	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
 	app.scrollHintID = "$1" // the hint belongs to the previous incarnation
 	app.scrollHintUntil = time.Now().Add(time.Minute)
 
@@ -1895,4 +1899,32 @@ func TestFullscreenWheelForwardUsesEventCoords(t *testing.T) {
 	require.Len(t, p.wheelSnapshot(), 1)
 	assert.Equal(t, wheelCall{name: "devbox", up: true, x: 12, y: 7}, p.wheelSnapshot()[0],
 		"the forwarded event carries the mouse position, not the pane cursor")
+}
+
+// --- Copilot round-9 fixes: conditional hint wording, single-impulse wheel ---
+
+func TestScrollHintOffersEnterOnlyWhenForwardingAvailable(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	seq := app.previewScroll.seq
+
+	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	require.NotEmpty(t, app.logs)
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "Hit Enter", "an alt-screen pane can be scrolled inside, so the hint says how")
+}
+
+func TestScrollHintPlainForPlainPanes(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	seq := app.previewScroll.seq
+
+	app.applyPreviewScrollLoad(seq, make([]string, 5), 5, nil)
+	require.NotEmpty(t, app.logs)
+	assert.NotContains(t, app.logs[len(app.logs)-1].msg, "Hit Enter", "a plain shell cannot be scrolled inside; the hint must not send the user there")
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "No scrollback available.")
 }

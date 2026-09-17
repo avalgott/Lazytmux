@@ -93,6 +93,7 @@ type App struct {
 	// programs like Claude Code): "press Enter to open it and scroll inside".
 	scrollHintName  string
 	scrollHintID    string // tmux ID the hint belongs to (same-name recreations must not inherit it)
+	scrollHintMsg   string // the message shown (depends on whether scrolling inside is possible)
 	scrollHintUntil time.Time
 }
 
@@ -368,6 +369,7 @@ func (a *App) enterFullScreen() {
 	a.fullscreenNoScrollback = false
 	a.scrollHintName = ""
 	a.scrollHintID = ""
+	a.scrollHintMsg = ""
 	a.scrollHintUntil = time.Time{}
 	a.preview.Invalidate()
 	a.fullscreen.Enter(sess.Name)

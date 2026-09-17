@@ -49,7 +49,7 @@ func (a *App) renderPreview(v *gocui.View) {
 	// itself in the title for a few seconds (the log keeps a record too).
 	// Dashboard only — the fullscreen frame title carries the session name.
 	if !a.fullscreen.IsActive() && a.scrollHintName == sess.Name && a.scrollHintID == sess.ID && time.Now().Before(a.scrollHintUntil) {
-		v.Title = " " + scrollHintText + " "
+		v.Title = " " + a.scrollHintMsg + " "
 	}
 
 	previewW := v.InnerWidth()

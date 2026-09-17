@@ -436,7 +436,7 @@ func (c *ExecClient) PaneInputFlags(ctx context.Context, target string) (bool, b
 // as SGR mouse escape sequences (press + release). A program with mouse
 // tracking enabled reads them as a real wheel event.
 func (c *ExecClient) SendMouseWheel(ctx context.Context, target string, up bool, x, y int) error {
-	_, err := c.run(ctx, "send-keys", "-l", "-t", target, "--", sgrWheelPair(up, x, y))
+	_, err := c.run(ctx, "send-keys", "-l", "-t", target, "--", sgrWheel(up, x, y))
 	return err
 }
 
@@ -479,10 +479,12 @@ func parseInputFlags(s string) (altOn, mouseSGR bool, cx, cy int, err error) {
 	return nums[0] == 1, nums[1] == 1 && nums[2] == 1, nums[3], nums[4], nil
 }
 
-// sgrWheelPair builds the SGR mouse escape sequences for one wheel click:
-// a press and a release. Coordinates are converted from tmux's 0-based pane
-// cursor to SGR's 1-based scheme, clamped to at least 1.
-func sgrWheelPair(up bool, x, y int) string {
+// sgrWheel builds the SGR mouse escape sequence for one wheel step. Wheel
+// motion is reported as single impulses — unlike button presses there is no
+// release event, so appending one would inject a spurious second event.
+// Coordinates are converted from tmux's 0-based pane cursor to SGR's
+// 1-based scheme, clamped to at least 1.
+func sgrWheel(up bool, x, y int) string {
 	b := 64
 	if !up {
 		b = 65
@@ -494,7 +496,7 @@ func sgrWheelPair(up bool, x, y int) string {
 	if cy < 1 {
 		cy = 1
 	}
-	return fmt.Sprintf("\x1b[<%d;%d;%dM\x1b[<%d;%d;%dm", b, cx, cy, b, cx, cy)
+	return fmt.Sprintf("\x1b[<%d;%d;%dM", b, cx, cy)
 }
 
 func (c *ExecClient) SendKeys(ctx context.Context, target string, keys ...string) error {

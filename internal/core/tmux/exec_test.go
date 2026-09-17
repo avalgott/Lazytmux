@@ -273,7 +273,7 @@ func TestParseInputFlags(t *testing.T) {
 	}
 }
 
-func TestSGRWheelPair(t *testing.T) {
+func TestSGRWheel(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
@@ -285,24 +285,24 @@ func TestSGRWheelPair(t *testing.T) {
 			name: "wheel up at 0-based coords",
 			up:   true,
 			x:    10, y: 5,
-			want: "\x1b[<64;11;6M\x1b[<64;11;6m",
+			want: "\x1b[<64;11;6M",
 		},
 		{
 			name: "wheel down at origin",
 			up:   false,
 			x:    0, y: 0,
-			want: "\x1b[<65;1;1M\x1b[<65;1;1m",
+			want: "\x1b[<65;1;1M",
 		},
 		{
 			name: "negative coords clamp to one",
 			up:   true,
 			x:    -5, y: -3,
-			want: "\x1b[<64;1;1M\x1b[<64;1;1m",
+			want: "\x1b[<64;1;1M",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, sgrWheelPair(tt.up, tt.x, tt.y))
+			assert.Equal(t, tt.want, sgrWheel(tt.up, tt.x, tt.y))
 		})
 	}
 }
