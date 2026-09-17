@@ -92,8 +92,9 @@ type App struct {
 	bufferGens             map[string]uint64 // generation the buffer was last fed under
 	buffersMu              sync.Mutex        // guards the buffers map (LineBuffer locks itself)
 	sessionGen             atomic.Uint64
-	lastSessionSig         string      // name=ID signature of the last applied refresh
-	quitting               atomic.Bool // set when the main loop exits; the wheel worker drops leftovers
+	lastSessionSig         string        // name=ID signature of the last applied refresh
+	quitting               atomic.Bool   // set when the main loop exits; the wheel worker drops leftovers
+	quitCh                 chan struct{} // closed when the main loop exits; unblocks waiting workers
 
 	// scrollHint is the transient preview-title hint shown after a scroll
 	// attempt on a session that keeps its own scrollback (alternate-screen
@@ -153,6 +154,7 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 		bufferIDs:     make(map[string]string),
 		bufferGens:    make(map[string]uint64),
 		wheelQueue:    make(chan wheelTask, 64),
+		quitCh:        make(chan struct{}),
 	}
 
 	g.Highlight = true
@@ -229,6 +231,7 @@ func (a *App) Run() error {
 	// cycle, and an unclosed queue would leak the worker and its app.
 	a.quitting.Store(true)
 	close(a.wheelQueue)
+	close(a.quitCh)
 	if err != nil {
 		if strings.Contains(err.Error(), "quit") {
 			return nil

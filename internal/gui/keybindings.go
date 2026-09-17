@@ -530,10 +530,20 @@ func (a *App) processWheelTask(t wheelTask) {
 	if d == wheelForwarded || d == wheelIgnored {
 		return
 	}
+	// Wait for the fallback to apply on the event loop before the next task
+	// is decided — otherwise a queued wheel-down could be judged against the
+	// pre-entry state and discarded. The quit channel unblocks the wait when
+	// the main loop exits and the closure can never run.
+	done := make(chan struct{})
 	a.g.Update(func(*gocui.Gui) error {
 		a.applyWheelFallbackIfCurrent(t, d, actErr)
+		close(done)
 		return nil
 	})
+	select {
+	case <-done:
+	case <-a.quitCh:
+	}
 }
 
 // applyWheelFallbackIfCurrent applies a fallback decision on the event loop

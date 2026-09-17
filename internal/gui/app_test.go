@@ -2393,3 +2393,53 @@ func TestResizeInvalidatesQueuedWheelWork(t *testing.T) {
 	assert.NotEqual(t, wGen, app.wheelGen.Load(), "a resize invalidates queued wheel forwards")
 	assert.NotEqual(t, exitGen, app.wheelExitGen.Load(), "a resize invalidates queued wheel fallbacks")
 }
+
+// --- Copilot round-22 fixes ---
+
+func TestStaleGenFullscreenLoadRestarts(t *testing.T) {
+	p := &fakeProvider{paneHeight: 10}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+	app.scroll.Enter(20, 80)
+	seq := app.scroll.seq
+	sGen := app.sessionGen.Load()
+
+	p.mu.Lock()
+	n0 := len(p.scrollRanges)
+	p.mu.Unlock()
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}, {Name: "other", ID: "$9"}}, nil)
+	app.applyScrollLoad(seq, sGen, make([]string, 25), 10, nil)
+
+	assert.True(t, app.scroll.IsActive(), "the rejected load must restart, not strand the panel")
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.scrollRanges) > n0
+	}, time.Second, 10*time.Millisecond, "a replacement load must be requested under the current generation")
+}
+
+func TestStaleGenPreviewLoadRestarts(t *testing.T) {
+	p := &fakeProvider{paneHeight: 10}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(20, 78)
+	seq := app.previewScroll.seq
+	sGen := app.sessionGen.Load()
+
+	app.previewScrollTargetID = sessionIdentity(session.Info{ID: "$1", Created: 100})
+	p.mu.Lock()
+	n0 := len(p.scrollRanges)
+	p.mu.Unlock()
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}, {Name: "other", ID: "$9"}}, nil)
+	app.applyPreviewScrollLoad(seq, sGen, make([]string, 25), 10, nil)
+
+	assert.True(t, app.previewScroll.IsActive(), "the rejected load must restart, not strand the panel")
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.scrollRanges) > n0
+	}, time.Second, 10*time.Millisecond, "a replacement load must be requested under the current generation")
+}

@@ -233,8 +233,13 @@ func (a *App) finishScrollLoadFor(apply func(seq int64, sGen uint64, lines []str
 // no-scrollback hint.
 func (a *App) applyScrollLoad(seq int64, sGen uint64, lines []string, paneH int, loadErr error) {
 	// A session recreated under the same name while the capture was in
-	// flight must not receive the old pane's snapshot.
+	// flight must not receive the old pane's snapshot. When the rejection
+	// hits the latest load, restart it under the current generation — the
+	// panel must not stay on "Loading scrollback..." forever.
 	if a.sessionGen.Load() != sGen {
+		if a.scroll.IsActive() && a.scroll.seq == seq {
+			a.restartScrollLoad()
+		}
 		return
 	}
 	applied, noHistory, err := a.applyScrollLoadState(a.scroll, seq, lines, paneH, loadErr)
@@ -444,6 +449,11 @@ func (a *App) restartPreviewScrollLoad() {
 // instead: there is nothing to browse.
 func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, lines []string, paneH int, loadErr error) {
 	if a.sessionGen.Load() != sGen {
+		// Same dead end as the fullscreen applier: restart the load under
+		// the current generation instead of stranding the loading panel.
+		if a.previewScroll.IsActive() && a.previewScroll.seq == seq {
+			a.restartPreviewScrollLoad()
+		}
 		return
 	}
 	applied, noHistory, err := a.applyScrollLoadState(a.previewScroll, seq, lines, paneH, loadErr)
