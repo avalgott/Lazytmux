@@ -100,11 +100,16 @@ func (ss *ScrollState) Move(delta int) {
 	ss.clampOffset()
 }
 
-// Page scrolls by roughly half a viewport. A pending top request is
-// cancelled: the latest gesture wins.
+// Page scrolls by roughly half a viewport (at least one line — a one-row
+// viewport must still page). A pending top request is cancelled: the latest
+// gesture wins.
 func (ss *ScrollState) Page(delta int) {
 	ss.pendingTop = false
-	ss.offsetFromBottom -= delta * (ss.viewH / 2)
+	step := ss.viewH / 2
+	if step < 1 {
+		step = 1
+	}
+	ss.offsetFromBottom -= delta * step
 	ss.clampOffset()
 }
 

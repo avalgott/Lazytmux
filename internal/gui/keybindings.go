@@ -527,22 +527,40 @@ func (a *App) wheelWorker() {
 // loop, the state change marshaled back onto it.
 func (a *App) processWheelTask(t wheelTask) {
 	d, actErr := a.decideFullscreenWheel(t.target, t.fsGen, t.wGen, t.sGen, t.delta, t.x, t.y, t.hasPos)
-	if d == wheelForwarded || d == wheelIgnored {
+	if d == wheelForwarded {
 		return
 	}
-	// Wait for the fallback to apply on the event loop before the next task
+	// Wait for the decision to apply on the event loop before the next task
 	// is decided — otherwise a queued wheel-down could be judged against the
-	// pre-entry state and discarded. The quit channel unblocks the wait when
-	// the main loop exits and the closure can never run.
+	// pre-entry state and discarded. An IGNORED positive delta is still
+	// applied when the same fullscreen scroll state became active in the
+	// meantime (a rapid up/down sequence must return toward live). The quit
+	// channel unblocks the wait when the main loop exits and the closure can
+	// never run.
 	done := make(chan struct{})
 	a.g.Update(func(*gocui.Gui) error {
-		a.applyWheelFallbackIfCurrent(t, d, actErr)
+		if d == wheelFallback {
+			a.applyWheelFallbackIfCurrent(t, d, actErr)
+		} else {
+			a.applyWheelIgnoredIfScrolling(t)
+		}
 		close(done)
 		return nil
 	})
 	select {
 	case <-done:
 	case <-a.quitCh:
+	}
+}
+
+// applyWheelIgnoredIfScrolling applies an ignored positive delta when the
+// initiating fullscreen state is still current and scroll mode is active —
+// the wheel-down that followed a queued wheel-up scrolls the frozen
+// snapshot instead of vanishing.
+func (a *App) applyWheelIgnoredIfScrolling(t wheelTask) {
+	if a.wheelFallbackCurrent(t.fsGen, t.exitGen, t.sGen, t.target) && a.scroll.IsActive() {
+		a.scroll.Move(t.delta)
+		a.g.Update(func(*gocui.Gui) error { return nil })
 	}
 }
 

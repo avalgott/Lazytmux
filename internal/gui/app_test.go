@@ -2468,3 +2468,42 @@ func TestSessionGenAdvancesOnRename(t *testing.T) {
 	app.applySessionRefresh([]session.Info{{Name: "devbox2", ID: "$1", Created: 100}}, nil)
 	assert.NotEqual(t, gen, app.sessionGen.Load(), "a rename must invalidate in-flight captures")
 }
+
+// --- Copilot round-25 fixes ---
+
+func TestPageStepAtLeastOneLine(t *testing.T) {
+	ss := &ScrollState{}
+	ss.Enter(1, 80)
+	ss.lines = make([]string, 10)
+	ss.total = 10
+	ss.loaded = true
+	ss.Page(-1)
+	assert.Equal(t, 1, ss.offsetFromBottom, "a one-row viewport still pages one line")
+	ss.Page(1)
+	assert.Equal(t, 0, ss.offsetFromBottom)
+}
+
+func TestQueuedWheelDownAppliesAfterUpEnteredScroll(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+	fsGen := app.fullscreenGen.Load()
+	exitGen := app.wheelExitGen.Load()
+	sGen := app.sessionGen.Load()
+
+	// Queued up then down over a non-mouse pane.
+	up := wheelTask{target: "devbox", fsGen: fsGen, wGen: app.wheelGen.Load(), exitGen: exitGen, sGen: sGen, delta: -3}
+	app.enqueueWheelTask(up)
+	d, err := app.decideFullscreenWheel(up.target, up.fsGen, up.wGen, up.sGen, up.delta, up.x, up.y, up.hasPos)
+	require.NoError(t, err)
+	app.applyWheelFallbackIfCurrent(up, d, err)
+	assert.Equal(t, 3, app.scroll.offsetFromBottom)
+
+	down := wheelTask{target: "devbox", fsGen: fsGen, wGen: app.wheelGen.Load(), exitGen: exitGen, sGen: sGen, delta: 3}
+	dd, err := app.decideFullscreenWheel(down.target, down.fsGen, down.wGen, down.sGen, down.delta, down.x, down.y, down.hasPos)
+	require.NoError(t, err)
+	assert.Equal(t, wheelIgnored, dd)
+	app.applyWheelIgnoredIfScrolling(down)
+	assert.Equal(t, 0, app.scroll.offsetFromBottom, "the queued wheel-down scrolls the snapshot instead of vanishing")
+}
