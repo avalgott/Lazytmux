@@ -78,6 +78,7 @@ type App struct {
 	// so the status bar can say so and the wheel forwards to the pane.
 	fullscreenNoScrollback bool
 	fullscreenGen          atomic.Uint64 // bumped on enter/exit; async callbacks compare against it
+	wheelGen               atomic.Uint64 // bumped on scroll-mode transitions; stale wheel callbacks compare against it
 	fsMu                   sync.Mutex    // serializes wheel injection with fullscreen transitions
 	lastResizeW            int           // and the size it was resized to
 	lastResizeH            int

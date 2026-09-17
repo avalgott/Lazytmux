@@ -38,6 +38,7 @@ type fakeProvider struct {
 	cursorY      int
 	wheels       []wheelCall   // recorded ForwardMouseWheel calls
 	wheelBlock   chan struct{} // when set, ForwardMouseWheel blocks until closed
+	wheelStarted chan struct{} // when set, signaled when ForwardMouseWheel is entered
 	err          error
 }
 
@@ -106,6 +107,9 @@ func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, 
 }
 
 func (f *fakeProvider) ForwardMouseWheel(_ context.Context, name string, up bool, x, y int) error {
+	if f.wheelStarted != nil {
+		f.wheelStarted <- struct{}{}
+	}
 	if f.wheelBlock != nil {
 		<-f.wheelBlock
 	}
@@ -2089,10 +2093,10 @@ func TestWheelFallbackDiscardedAfterLeavingFullscreen(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
 	fsGen := app.fullscreenGen.Load()
-	assert.True(t, app.wheelFallbackCurrent(fsGen, "devbox"))
+	assert.True(t, app.wheelFallbackCurrent(fsGen, app.wheelGen.Load(), "devbox"))
 
 	app.exitFullScreen()
-	assert.False(t, app.wheelFallbackCurrent(fsGen, "devbox"), "a fallback from the previous fullscreen session must be discarded")
+	assert.False(t, app.wheelFallbackCurrent(fsGen, app.wheelGen.Load(), "devbox"), "a fallback from the previous fullscreen session must be discarded")
 }
 
 func TestScrollHintNotInheritedByRecycledID(t *testing.T) {
@@ -2185,7 +2189,7 @@ func TestPositionlessFullscreenWheelIgnored(t *testing.T) {
 }
 
 func TestExitSerializedWithInFlightForward(t *testing.T) {
-	p := &fakeProvider{altOn: true, sgrMouse: true, wheelBlock: make(chan struct{})}
+	p := &fakeProvider{altOn: true, sgrMouse: true, wheelBlock: make(chan struct{}), wheelStarted: make(chan struct{})}
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
@@ -2195,8 +2199,8 @@ func TestExitSerializedWithInFlightForward(t *testing.T) {
 		_, _ = app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
 		close(sendDone)
 	}()
-	// Give the decide goroutine time to reach the blocked send.
-	time.Sleep(50 * time.Millisecond)
+	// Deterministically wait until the forward is entered (not just a sleep).
+	<-p.wheelStarted
 
 	exitDone := make(chan struct{})
 	go func() {
@@ -2211,4 +2215,22 @@ func TestExitSerializedWithInFlightForward(t *testing.T) {
 	close(p.wheelBlock)
 	<-sendDone
 	<-exitDone
+}
+
+// --- Copilot round-16 fixes ---
+
+func TestWheelFallbackRejectedAfterScrollModeToggle(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	fsGen := app.fullscreenGen.Load()
+	wGen := app.wheelGen.Load()
+	// The user enters and exits scroll mode while the flags query is in
+	// flight — the pending fallback must not re-enter it.
+	app.enterScrollMode()
+	app.exitScrollMode()
+	assert.False(t, app.wheelFallbackCurrent(fsGen, wGen, "devbox"),
+		"a fallback from before the scroll-mode toggle must be discarded")
 }

@@ -424,13 +424,14 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 		// while the query was in flight.
 		target := a.fullscreen.Target()
 		fsGen := a.fullscreenGen.Load()
+		wGen := a.wheelGen.Load()
 		go func() {
 			d, actErr := a.decideFullscreenWheel(target, fsGen, delta, x, y, hasPos)
 			if d == wheelForwarded || d == wheelIgnored {
 				return
 			}
 			a.g.Update(func(*gocui.Gui) error {
-				if a.wheelFallbackCurrent(fsGen, target) {
+				if a.wheelFallbackCurrent(fsGen, wGen, target) {
 					a.performWheelAction(d, delta, actErr)
 				}
 				return nil
@@ -497,11 +498,13 @@ func (a *App) decideFullscreenWheel(target string, fsGen uint64, delta, x, y int
 	return wheelFallback, nil
 }
 
-// wheelFallbackCurrent reports whether the fullscreen state that initiated a
-// wheel decision is still the live one — a slow query must not apply its
-// fallback to a session the user has since left.
-func (a *App) wheelFallbackCurrent(fsGen uint64, target string) bool {
-	return a.fullscreenGen.Load() == fsGen && a.fullscreen.IsActive() && a.fullscreen.Target() == target
+// wheelFallbackCurrent reports whether the state that initiated a wheel
+// decision is still the live one — a slow query must not apply its fallback
+// to a session the user has since left, or after the user has entered and
+// exited scroll mode while the query was in flight.
+func (a *App) wheelFallbackCurrent(fsGen, wGen uint64, target string) bool {
+	return a.fullscreenGen.Load() == fsGen && a.wheelGen.Load() == wGen &&
+		a.fullscreen.IsActive() && a.fullscreen.Target() == target
 }
 
 // performWheelAction applies a wheel decision on the event loop.
