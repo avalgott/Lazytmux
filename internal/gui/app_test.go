@@ -2770,7 +2770,7 @@ func TestFullscreenScrollExitsOnTargetRecreation(t *testing.T) {
 
 func TestPaneIDsPrunedOnIdentityChange(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
-	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}}, nil)
 	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
 
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2", Created: 200}}, nil)
