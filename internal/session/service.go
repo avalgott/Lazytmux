@@ -18,9 +18,11 @@ import (
 	"github.com/avalgott/Lazytmux/internal/core/tmux"
 )
 
-// Info is a read-only view of a tmux session for display.
+// Info is a read-only view of a tmux session for display. ID is tmux's
+// stable session ID — names can be reused after a kill, the ID cannot.
 type Info struct {
 	Name     string
+	ID       string
 	Path     string
 	Attached bool
 	Windows  int
@@ -113,6 +115,7 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 	for i, sess := range sessions {
 		infos[i] = Info{
 			Name:     sess.Name,
+			ID:       sess.ID,
 			Path:     sess.Path,
 			Attached: sess.Attached,
 			Windows:  sess.Windows,

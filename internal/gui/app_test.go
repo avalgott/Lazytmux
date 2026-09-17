@@ -1775,3 +1775,19 @@ func TestStaleGenerationDoesNotInstallResult(t *testing.T) {
 	app.preview.Unlock()
 	assert.Equal(t, "", content, "a stale completion must not install its result into the render cache")
 }
+
+// --- Copilot round-6 fix: identity-bound buffers ---
+
+func TestBufferResetWhenSessionIdentityChanges(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.feedBuffer("devbox", "old-session-output")
+
+	// The buffer survives a refresh that sees the same identity.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1"}}, nil)
+	assert.NotNil(t, app.bufferLookup("devbox"))
+
+	// A recreated session (same name, new ID) must not inherit the old
+	// session's captured scrollback.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$2"}}, nil)
+	assert.Nil(t, app.bufferLookup("devbox"), "a recreated session must start with a fresh buffer")
+}

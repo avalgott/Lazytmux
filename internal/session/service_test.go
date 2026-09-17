@@ -426,3 +426,14 @@ func TestServiceCaptureKeepsFullContent(t *testing.T) {
 	// The windowed Content remains as before (truncated to the preview size).
 	assert.NotContains(t, preview.Content, strings.Repeat("w", 120))
 }
+
+func TestServiceListCarriesSessionID(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.Infos["devbox"] = tmux.SessionInfo{Name: "devbox", ID: "$5", Path: "/home/u"}
+
+	svc := NewService(mock)
+	infos, err := svc.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	assert.Equal(t, "$5", infos[0].ID, "the stable tmux session ID rides along for buffer identity")
+}

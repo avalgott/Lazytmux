@@ -81,7 +81,8 @@ type App struct {
 	refreshBusy            atomic.Bool // true while a background session refresh is in flight
 	attachTarget           string      // session to attach to; set on Enter, main() acts on it
 	buffers                map[string]*LineBuffer
-	buffersMu              sync.Mutex // guards the buffers map (LineBuffer locks itself)
+	bufferIDs              map[string]string // buffer name -> tmux session ID it belongs to
+	buffersMu              sync.Mutex        // guards the buffers map (LineBuffer locks itself)
 	sessionGen             atomic.Uint64
 
 	// scrollHint is the transient preview-title hint shown after a scroll
@@ -137,6 +138,7 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 		scroll:        &ScrollState{},
 		previewScroll: &ScrollState{},
 		buffers:       make(map[string]*LineBuffer),
+		bufferIDs:     make(map[string]string),
 	}
 
 	g.Highlight = true
@@ -267,6 +269,10 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 	// generation under the same lock before feeding (feedBufferIfCurrent),
 	// so a refresh can never interleave between the check and the feed —
 	// which would recreate a pruned buffer with stale content.
+	//
+	// Buffers are also bound to the session's stable tmux ID: a session
+	// killed and recreated under the same name between refreshes gets a
+	// fresh buffer instead of inheriting the old pane's scrollback.
 	a.buffersMu.Lock()
 	a.sessionGen.Add(1)
 	for name := range a.buffers {
@@ -274,11 +280,16 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 		for _, s := range a.sessions {
 			if s.Name == name {
 				found = true
+				if a.bufferIDs[name] != "" && a.bufferIDs[name] != s.ID {
+					delete(a.buffers, name)
+				}
+				a.bufferIDs[name] = s.ID
 				break
 			}
 		}
 		if !found {
 			delete(a.buffers, name)
+			delete(a.bufferIDs, name)
 		}
 	}
 	a.buffersMu.Unlock()
