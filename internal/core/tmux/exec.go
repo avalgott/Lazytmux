@@ -418,13 +418,14 @@ func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) 
 }
 
 // PaneInputFlags reports the pane's input mode in one display-message call:
-// whether the alternate screen is active, whether the program has mouse
-// tracking enabled, and the pane cursor position (0-based). The format is
-// the positional argument, matching ShowMessage — display-message expands
-// format variables there on every tmux version.
+// whether the alternate screen is active, whether the program has SGR (1006)
+// mouse tracking enabled — the only encoding SendMouseWheel emits — and the
+// pane cursor position (0-based). The format is the positional argument,
+// matching ShowMessage — display-message expands format variables there on
+// every tmux version.
 func (c *ExecClient) PaneInputFlags(ctx context.Context, target string) (bool, bool, int, int, error) {
 	out, err := c.run(ctx, "display-message", "-t", target, "-p",
-		"#{alternate_on} #{mouse_any_flag} #{cursor_x} #{cursor_y}")
+		"#{alternate_on} #{mouse_sgr_flag} #{cursor_x} #{cursor_y}")
 	if err != nil {
 		return false, false, 0, 0, err
 	}

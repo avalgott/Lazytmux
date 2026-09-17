@@ -63,7 +63,8 @@ type Client interface {
 	CapturePaneANSIHistory(ctx context.Context, target string) (content string, paneHeight int, err error)
 
 	// PaneInputFlags reports the pane's input mode: alternate screen active,
-	// mouse tracking enabled, and the 0-based pane cursor position.
+	// SGR (1006) mouse tracking enabled, and the 0-based pane cursor
+	// position.
 	PaneInputFlags(ctx context.Context, target string) (altOn, mouseAny bool, cursorX, cursorY int, err error)
 
 	// SendMouseWheel sends a mouse wheel event to the pane's input stream

@@ -32,7 +32,7 @@ type fakeProvider struct {
 	history      int                 // value returned by HistorySize
 	paneHeight   int                 // value returned by PaneHeight
 	altOn        bool                // value returned by PaneInputFlags
-	mouseAny     bool
+	sgrMouse     bool                // value returned by PaneInputFlags (SGR mouse)
 	wheelErr     error               // error for ForwardMouseWheel only
 	cursorX      int
 	cursorY      int
@@ -101,7 +101,7 @@ func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string) (session.P
 func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, int, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.altOn, f.mouseAny, f.cursorX, f.cursorY, f.err
+	return f.altOn, f.sgrMouse, f.cursorX, f.cursorY, f.err
 }
 
 func (f *fakeProvider) ForwardMouseWheel(_ context.Context, name string, up bool, x, y int) error {
@@ -1279,7 +1279,7 @@ func TestPreviewScrollZeroHistoryExitsWithStatus(t *testing.T) {
 // --- Wheel passthrough for mouse-tracking panes in fullscreen ---
 
 func TestFullscreenWheelForwardsToMousePane(t *testing.T) {
-	p := &fakeProvider{altOn: true, mouseAny: true, cursorX: 10, cursorY: 5}
+	p := &fakeProvider{altOn: true, sgrMouse: true, cursorX: 10, cursorY: 5}
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
@@ -1297,7 +1297,7 @@ func TestFullscreenWheelForwardsToMousePane(t *testing.T) {
 }
 
 func TestFullscreenWheelFallsBackToScrollModeWithoutMouse(t *testing.T) {
-	app := newTestApp(t, &fakeProvider{altOn: true, mouseAny: false})
+	app := newTestApp(t, &fakeProvider{altOn: true, sgrMouse: false})
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
 	require.NoError(t, app.layout(app.g))
@@ -1697,7 +1697,7 @@ func TestTopThenDownExitsWhileLoading(t *testing.T) {
 }
 
 func TestFullscreenWheelForwardFailureFallsBackToScrollMode(t *testing.T) {
-	p := &fakeProvider{altOn: true, mouseAny: true}
+	p := &fakeProvider{altOn: true, sgrMouse: true}
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
@@ -1707,4 +1707,14 @@ func TestFullscreenWheelForwardFailureFallsBackToScrollMode(t *testing.T) {
 
 	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
 	assert.True(t, app.scroll.IsActive(), "a failed forward must fall back to scroll mode, not vanish")
+}
+
+func TestFullscreenWheelFallsBackWithoutSGRMouse(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{altOn: true, sgrMouse: false})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
+	assert.True(t, app.scroll.IsActive(), "an alternate-screen pane without SGR mouse must not receive SGR wheel events")
 }

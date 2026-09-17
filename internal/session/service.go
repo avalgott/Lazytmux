@@ -57,10 +57,11 @@ type Provider interface {
 	// tmux operation, with ANSI escape codes and the pane height.
 	CaptureScrollback(ctx context.Context, name string) (Preview, error)
 	// PaneInputFlags reports the active pane's input mode: alternate screen
-	// active, mouse tracking enabled, and the 0-based cursor position. The
-	// GUI uses it to decide whether the wheel should go to the pane's
-	// program (which handles its own scrolling) or to lazytmux scroll mode.
-	PaneInputFlags(ctx context.Context, name string) (altOn, mouseAny bool, cursorX, cursorY int, err error)
+	// active, SGR (1006) mouse tracking enabled, and the 0-based cursor
+	// position. The GUI uses it to decide whether the wheel should go to the
+	// pane's program (which handles its own scrolling) or to lazytmux scroll
+	// mode — SGR is the only wheel encoding it emits.
+	PaneInputFlags(ctx context.Context, name string) (altOn, sgrMouse bool, cursorX, cursorY int, err error)
 	// ForwardMouseWheel sends a mouse wheel event to the pane's input
 	// stream (0-based pane cursor coordinates).
 	ForwardMouseWheel(ctx context.Context, name string, up bool, cursorX, cursorY int) error
