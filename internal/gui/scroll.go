@@ -156,10 +156,15 @@ func (ss *ScrollState) position() int {
 
 // enterScrollMode switches fullscreen into scrollback browsing.
 func (a *App) enterScrollMode() {
+	// Serialize with wheel forwarding: an in-flight send holds fsMu, and
+	// entering scroll mode must wait for it rather than activating after
+	// the injection lands.
+	a.fsMu.Lock()
+	defer a.fsMu.Unlock()
 	if !a.fullscreen.IsActive() || a.scroll.IsActive() {
 		return
 	}
-	a.wheelGen.Add(1) // invalidate in-flight wheel fallbacks
+	a.wheelGen.Add(1) // invalidate in-flight wheel forwards
 	target := a.fullscreen.Target()
 	if target == "" {
 		return

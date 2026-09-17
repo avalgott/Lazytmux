@@ -425,6 +425,7 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 			fsGen:   a.fullscreenGen.Load(),
 			wGen:    a.wheelGen.Load(),
 			exitGen: a.wheelExitGen.Load(),
+			sGen:    a.sessionGen.Load(),
 			delta:   delta, x: x, y: y, hasPos: hasPos,
 		})
 		return
@@ -457,7 +458,7 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 // decideFullscreenWheel runs the tmux queries for a live fullscreen wheel
 // event and returns the decision without touching UI state — safe to run
 // from a goroutine.
-func (a *App) decideFullscreenWheel(target string, fsGen, wGen uint64, delta, x, y int, hasPos bool) (wheelDecision, error) {
+func (a *App) decideFullscreenWheel(target string, fsGen, wGen, sGen uint64, delta, x, y int, hasPos bool) (wheelDecision, error) {
 	alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
 	if err == nil && alt && mouse {
 		// The generation checks and the send are serialized with fullscreen
@@ -466,7 +467,7 @@ func (a *App) decideFullscreenWheel(target string, fsGen, wGen uint64, delta, x,
 		// input) invalidates the pending forward.
 		a.fsMu.Lock()
 		defer a.fsMu.Unlock()
-		if a.fullscreenGen.Load() != fsGen || a.wheelGen.Load() != wGen {
+		if a.fullscreenGen.Load() != fsGen || a.wheelGen.Load() != wGen || a.sessionGen.Load() != sGen {
 			return wheelIgnored, nil
 		}
 		if hasPos {
@@ -495,6 +496,7 @@ type wheelTask struct {
 	fsGen   uint64
 	wGen    uint64
 	exitGen uint64
+	sGen    uint64 // session generation: a recreated same-name pane must not receive the event
 	delta   int
 	x, y    int
 	hasPos  bool
@@ -521,7 +523,7 @@ func (a *App) wheelWorker() {
 // processWheelTask runs one wheel event: the tmux queries off the event
 // loop, the state change marshaled back onto it.
 func (a *App) processWheelTask(t wheelTask) {
-	d, actErr := a.decideFullscreenWheel(t.target, t.fsGen, t.wGen, t.delta, t.x, t.y, t.hasPos)
+	d, actErr := a.decideFullscreenWheel(t.target, t.fsGen, t.wGen, t.sGen, t.delta, t.x, t.y, t.hasPos)
 	if d == wheelForwarded || d == wheelIgnored {
 		return
 	}
@@ -535,7 +537,7 @@ func (a *App) processWheelTask(t wheelTask) {
 // when the initiating state is still current. Split out so tests can drive
 // it directly (headless mode never runs gui.Update).
 func (a *App) applyWheelFallbackIfCurrent(t wheelTask, d wheelDecision, actErr error) {
-	if a.wheelFallbackCurrent(t.fsGen, t.exitGen, t.target) {
+	if a.wheelFallbackCurrent(t.fsGen, t.exitGen, t.sGen, t.target) {
 		a.performWheelAction(d, t.delta, actErr)
 	}
 }
@@ -545,8 +547,9 @@ func (a *App) applyWheelFallbackIfCurrent(t wheelTask, d wheelDecision, actErr e
 // to a session the user has since left, or after the user has exited scroll
 // mode while the query was in flight. Entering scroll mode does NOT
 // invalidate queued fallbacks: their deltas still accumulate in order.
-func (a *App) wheelFallbackCurrent(fsGen, exitGen uint64, target string) bool {
+func (a *App) wheelFallbackCurrent(fsGen, exitGen, sGen uint64, target string) bool {
 	return a.fullscreenGen.Load() == fsGen && a.wheelExitGen.Load() == exitGen &&
+		a.sessionGen.Load() == sGen &&
 		a.fullscreen.IsActive() && a.fullscreen.Target() == target
 }
 
