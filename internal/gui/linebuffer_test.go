@@ -271,3 +271,19 @@ func TestLineBufferReverseScrollMultiRowOverlap(t *testing.T) {
 	assert.Equal(t, []string{"a", "b", "c", "d", "e"}, b.Snapshot(),
 		"a two-row overlap must dedupe the whole overlapping head")
 }
+
+func TestLineBufferBlankLineScrollKeepsHistory(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b", "c"))
+	// A printed blank line scrolls "a" off while the screen shrinks a row:
+	// the scrolled-off line must stay in history.
+	b.Feed(screen("b", "c"))
+	assert.Equal(t, []string{"a", "b", "c"}, b.Snapshot(), "a scroll hidden by blank-line stripping must not lose history")
+
+	b2 := NewLineBuffer(100)
+	b2.Feed(screen("a", "b", "c"))
+	// An interior blank row grows the screen mid-scroll: the history line
+	// still survives.
+	b2.Feed(screen("b", "c", "", "d"))
+	assert.Equal(t, []string{"a", "b", "c", "", "d"}, b2.Snapshot())
+}

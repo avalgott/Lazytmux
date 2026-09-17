@@ -108,10 +108,23 @@ func (b *LineBuffer) update(scr []string) []string {
 	}
 	// In-place edit, full redraw, or a resized pane: replace the PREVIOUS
 	// screen region (its height, not the new one — a shrunk pane must not
-	// leave the old screen's tail behind as fake history). The new screen
-	// may overlap the retained history prefix (a reverse scroll re-reveals
-	// its top lines): drop the duplicated head of scr.
+	// leave the old screen's tail behind as fake history).
+	//
+	// A size mismatch can also hide a genuine scroll (blank-line stripping
+	// shrinks the screen; an interior blank grows it): when the old tail's
+	// suffix overlaps the new screen's head, the transformation was a scroll
+	// in disguise — append the new portion instead of replacing.
 	if len(b.lines) >= prev {
+		tail := b.lines[len(b.lines)-prev:]
+		o := 0
+		for k := 1; k <= len(tail) && k <= len(scr); k++ {
+			if slices.Equal(tail[len(tail)-k:], scr[:k]) {
+				o = k
+			}
+		}
+		if o > 0 {
+			return capLines(append(b.lines, scr[o:]...), b.cap)
+		}
 		prefix := b.lines[:len(b.lines)-prev]
 		// The largest suffix of the history prefix that equals the head of
 		// the new screen is one shared region: drop the duplicated head.

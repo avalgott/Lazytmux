@@ -302,10 +302,15 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 	a.buffersMu.Lock()
 	// Invalidate in-flight captures only when the session identity landscape
 	// changed — an ordinary poll must not starve captures that run longer
-	// than one refresh interval on a slow tmux server.
+	// than one refresh interval on a slow tmux server. The bump is
+	// serialized with fsMu: a wheel forward holds that lock across its
+	// generation check and the send, so a recreate can never land between
+	// them.
 	if sig := sessionListSig(sessions); sig != a.lastSessionSig {
 		a.lastSessionSig = sig
+		a.fsMu.Lock()
 		a.sessionGen.Add(1)
+		a.fsMu.Unlock()
 	}
 	for name := range a.buffers {
 		found := false
