@@ -221,6 +221,9 @@ func (a *App) cycleFocusHandler(g *gocui.Gui, v *gocui.View) error {
 		a.exitPreviewScroll()
 	}
 	a.focusMain = !a.focusMain
+	// Apply the view focus immediately: the redraw is queued, but keys
+	// arriving before it must already route by the new focus.
+	_ = a.setDashboardFocus(g)
 	a.g.Update(func(*gocui.Gui) error { return nil })
 	return nil
 }

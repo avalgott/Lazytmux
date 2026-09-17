@@ -2835,3 +2835,13 @@ func TestStalePaneFeedSkipped(t *testing.T) {
 	snap := app.bufferFor("devbox").Snapshot()
 	assert.Equal(t, []string{"P"}, snap, "the old pane's feed must not land after the pane changed")
 }
+
+// --- Copilot round-41 fixes ---
+
+func TestTabAppliesFocusImmediately(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	require.NoError(t, app.layout(app.g))
+
+	require.NoError(t, app.cycleFocusHandler(app.g, nil))
+	assert.Equal(t, "main", app.g.CurrentView().Name(), "the view focus must follow the toggle before any redraw")
+}
