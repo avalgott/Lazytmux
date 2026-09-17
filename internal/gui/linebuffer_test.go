@@ -115,3 +115,29 @@ func TestLineBufferShorterFeedSeedsAndGrows(t *testing.T) {
 	b.Feed(screen("only", "second"))
 	assert.Equal(t, []string{"only", "second"}, b.Snapshot())
 }
+
+func TestLineBufferKeepsBlankLastRow(t *testing.T) {
+	b := NewLineBuffer(100)
+	// The cursor row is stripped; filling it in place appends the new row.
+	b.Feed(screen("a", "b", ""))
+	assert.Equal(t, []string{"a", "b"}, b.Snapshot(), "the cursor row is not part of the scrollback")
+
+	b.Feed(screen("a", "b", "c"))
+	assert.Equal(t, []string{"a", "b", "c"}, b.Snapshot())
+	b.Feed(screen("b", "c", "d"))
+	assert.Equal(t, []string{"a", "b", "c", "d"}, b.Snapshot())
+}
+
+func TestLineBufferStripsTrailingBlankRows(t *testing.T) {
+	b := NewLineBuffer(100)
+	// A shell cursor row is always blank at the bottom; it never scrolls
+	// with the content and must not break shift alignment.
+	b.Feed(screen("a", "b", "c", ""))
+	assert.Equal(t, []string{"a", "b", "c"}, b.Snapshot(), "seed drops the cursor row")
+
+	b.Feed(screen("b", "c", "d", ""))
+	assert.Equal(t, []string{"a", "b", "c", "d"}, b.Snapshot(), "scroll-up aligns across the blank cursor row")
+
+	b.Feed(screen("c", "d", "e", ""))
+	assert.Equal(t, []string{"a", "b", "c", "d", "e"}, b.Snapshot())
+}

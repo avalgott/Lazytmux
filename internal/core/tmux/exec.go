@@ -363,20 +363,34 @@ func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target strin
 		return "", 0, 0, fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
 	}
 
-	// The cursor pair is the last line of the combined output. Both commands
-	// end their output with a newline, so trim trailing newlines first.
-	s := strings.TrimRight(string(out), "\n")
-	idx := strings.LastIndex(s, "\n")
-	if idx < 0 {
-		return s, 0, 0, nil
-	}
-	content := s[:idx]
-	cursorX, cursorY := 0, 0
-	if parts := strings.SplitN(strings.TrimSpace(s[idx+1:]), ",", 2); len(parts) == 2 {
-		cursorX, _ = strconv.Atoi(parts[0])
-		cursorY, _ = strconv.Atoi(parts[1])
-	}
+	content, cursorX, cursorY := splitCursorPair(string(out))
 	return content, cursorX, cursorY, nil
+}
+
+// splitCursorPair splits the combined output of
+// "capture-pane -ep ; display-message -p #{cursor_x},#{cursor_y}" into the
+// capture content and the cursor position. The cursor pair is the final
+// line when it parses as two integers. Splitting by line structure (rather
+// than trimming trailing newlines) keeps blank trailing rows — an
+// alt-screen app's cursor row — which TrimRight would destroy, wobbling the
+// row count between captures.
+func splitCursorPair(out string) (content string, cursorX, cursorY int) {
+	lines := strings.Split(out, "\n")
+	// The output ends with the cursor line's newline; drop that phantom.
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+	if n := len(lines); n > 0 {
+		if parts := strings.SplitN(strings.TrimSpace(lines[n-1]), ",", 2); len(parts) == 2 {
+			x, errX := strconv.Atoi(parts[0])
+			y, errY := strconv.Atoi(parts[1])
+			if errX == nil && errY == nil {
+				cursorX, cursorY = x, y
+				lines = lines[:n-1]
+			}
+		}
+	}
+	return strings.Join(lines, "\n"), cursorX, cursorY
 }
 
 // CapturePaneANSIHistory captures from the oldest history line to the

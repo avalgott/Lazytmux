@@ -304,3 +304,40 @@ func TestSGRWheelPair(t *testing.T) {
 		})
 	}
 }
+
+func TestSplitCursorPair(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		in      string
+		content string
+		cx, cy  int
+	}{
+		{
+			name:    "full screen without blank row",
+			in:      "r1\nr2\nr3\n10,14\n",
+			content: "r1\nr2\nr3",
+			cx:      10, cy: 14,
+		},
+		{
+			name:    "blank last row preserved",
+			in:      "r1\nr2\n\n10,14\n",
+			content: "r1\nr2\n",
+			cx:      10, cy: 14,
+		},
+		{
+			name:    "no cursor line",
+			in:      "r1\nr2\n",
+			content: "r1\nr2",
+			cx:      0, cy: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, cx, cy := splitCursorPair(tt.in)
+			assert.Equal(t, tt.content, content)
+			assert.Equal(t, tt.cx, cx)
+			assert.Equal(t, tt.cy, cy)
+		})
+	}
+}

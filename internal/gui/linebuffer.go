@@ -23,11 +23,15 @@ func NewLineBuffer(cap int) *LineBuffer {
 
 // Feed merges one full capture of the pane (raw content, "\n"-separated)
 // into the buffer. Safe for concurrent use.
+//
+// The content comes from CapturePaneANSIWithCursor, which has no trailing
+// newline — a trailing "\n" here is a real blank last row and must be kept,
+// or the screen height wobbles and shift alignment never matches.
 func (b *LineBuffer) Feed(content string) {
 	if content == "" {
 		return
 	}
-	scr := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	scr := strings.Split(content, "\n")
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.lines = b.update(scr)
@@ -42,6 +46,12 @@ func (b *LineBuffer) Snapshot() []string {
 
 // update applies the diff-append algorithm. The caller holds the lock.
 func (b *LineBuffer) update(scr []string) []string {
+	// A shell's cursor row is always blank at the bottom and never scrolls
+	// with the content — it is re-created each line. Strip it so the shift
+	// alignment compares content only (blank rows carry no information).
+	for len(scr) > 0 && scr[len(scr)-1] == "" {
+		scr = scr[:len(scr)-1]
+	}
 	n := len(scr)
 	b.screenH = n
 	if len(b.lines) == 0 {
