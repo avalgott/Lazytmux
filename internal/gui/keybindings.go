@@ -417,26 +417,16 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 		if !hasPos {
 			return
 		}
-		// The tmux round-trips run off the event loop: each can block for
-		// the client timeout, and queuing wheel input must not freeze the UI.
-		// The target and fullscreen generation are captured up front — the
-		// callback discards itself if the user left this fullscreen session
-		// while the query was in flight.
-		target := a.fullscreen.Target()
-		fsGen := a.fullscreenGen.Load()
-		wGen := a.wheelGen.Load()
-		go func() {
-			d, actErr := a.decideFullscreenWheel(target, fsGen, wGen, delta, x, y, hasPos)
-			if d == wheelForwarded || d == wheelIgnored {
-				return
-			}
-			a.g.Update(func(*gocui.Gui) error {
-				if a.wheelFallbackCurrent(fsGen, wGen, target) {
-					a.performWheelAction(d, delta, actErr)
-				}
-				return nil
-			})
-		}()
+		// The tmux round-trips run off the event loop through an ordered
+		// worker: each can block for the client timeout, and queued wheel
+		// input must neither freeze the UI nor be reordered.
+		a.enqueueWheelTask(wheelTask{
+			target:  a.fullscreen.Target(),
+			fsGen:   a.fullscreenGen.Load(),
+			wGen:    a.wheelGen.Load(),
+			exitGen: a.wheelExitGen.Load(),
+			delta:   delta, x: x, y: y, hasPos: hasPos,
+		})
 		return
 	}
 	// Dashboard: the wheel scrolls the preview panel.
@@ -498,12 +488,65 @@ func (a *App) decideFullscreenWheel(target string, fsGen, wGen uint64, delta, x,
 	return wheelFallback, nil
 }
 
+// wheelTask is one queued wheel event, with the generations captured at
+// enqueue time.
+type wheelTask struct {
+	target  string
+	fsGen   uint64
+	wGen    uint64
+	exitGen uint64
+	delta   int
+	x, y    int
+	hasPos  bool
+}
+
+// enqueueWheelTask appends a wheel event to the ordered queue; when the
+// queue is full (a very slow tmux), the newest event is dropped rather than
+// blocking the event loop.
+func (a *App) enqueueWheelTask(t wheelTask) {
+	select {
+	case a.wheelQueue <- t:
+	default:
+	}
+}
+
+// wheelWorker drains the wheel queue in arrival order — independent
+// goroutines would let delayed flag queries forward events out of order.
+func (a *App) wheelWorker() {
+	for t := range a.wheelQueue {
+		a.processWheelTask(t)
+	}
+}
+
+// processWheelTask runs one wheel event: the tmux queries off the event
+// loop, the state change marshaled back onto it.
+func (a *App) processWheelTask(t wheelTask) {
+	d, actErr := a.decideFullscreenWheel(t.target, t.fsGen, t.wGen, t.delta, t.x, t.y, t.hasPos)
+	if d == wheelForwarded || d == wheelIgnored {
+		return
+	}
+	a.g.Update(func(*gocui.Gui) error {
+		a.applyWheelFallbackIfCurrent(t, d, actErr)
+		return nil
+	})
+}
+
+// applyWheelFallbackIfCurrent applies a fallback decision on the event loop
+// when the initiating state is still current. Split out so tests can drive
+// it directly (headless mode never runs gui.Update).
+func (a *App) applyWheelFallbackIfCurrent(t wheelTask, d wheelDecision, actErr error) {
+	if a.wheelFallbackCurrent(t.fsGen, t.exitGen, t.target) {
+		a.performWheelAction(d, t.delta, actErr)
+	}
+}
+
 // wheelFallbackCurrent reports whether the state that initiated a wheel
 // decision is still the live one — a slow query must not apply its fallback
-// to a session the user has since left, or after the user has entered and
-// exited scroll mode while the query was in flight.
-func (a *App) wheelFallbackCurrent(fsGen, wGen uint64, target string) bool {
-	return a.fullscreenGen.Load() == fsGen && a.wheelGen.Load() == wGen &&
+// to a session the user has since left, or after the user has exited scroll
+// mode while the query was in flight. Entering scroll mode does NOT
+// invalidate queued fallbacks: their deltas still accumulate in order.
+func (a *App) wheelFallbackCurrent(fsGen, exitGen uint64, target string) bool {
+	return a.fullscreenGen.Load() == fsGen && a.wheelExitGen.Load() == exitGen &&
 		a.fullscreen.IsActive() && a.fullscreen.Target() == target
 }
 

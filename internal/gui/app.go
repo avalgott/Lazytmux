@@ -77,10 +77,12 @@ type App struct {
 	// tmux scrollback history (alternate-screen programs like Claude Code),
 	// so the status bar can say so and the wheel forwards to the pane.
 	fullscreenNoScrollback bool
-	fullscreenGen          atomic.Uint64 // bumped on enter/exit; async callbacks compare against it
-	wheelGen               atomic.Uint64 // bumped on scroll-mode transitions; stale wheel callbacks compare against it
-	fsMu                   sync.Mutex    // serializes wheel injection with fullscreen transitions
-	lastResizeW            int           // and the size it was resized to
+	fullscreenGen          atomic.Uint64  // bumped on enter/exit; async callbacks compare against it
+	wheelGen               atomic.Uint64  // bumped on scroll-mode transitions; stale forwards compare against it
+	wheelExitGen           atomic.Uint64  // bumped on scroll-mode exit; stale fallbacks compare against it
+	wheelQueue             chan wheelTask // ordered queue of wheel events (worker-owned)
+	fsMu                   sync.Mutex     // serializes wheel injection with fullscreen transitions
+	lastResizeW            int            // and the size it was resized to
 	lastResizeH            int
 	logs                   []logEntry  // recent status/error messages, shown in the logs panel
 	refreshBusy            atomic.Bool // true while a background session refresh is in flight
@@ -149,6 +151,7 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 		buffers:       make(map[string]*LineBuffer),
 		bufferIDs:     make(map[string]string),
 		bufferGens:    make(map[string]uint64),
+		wheelQueue:    make(chan wheelTask, 64),
 	}
 
 	g.Highlight = true
@@ -190,6 +193,10 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 // user wants to attach to.
 func (a *App) Run() error {
 	defer a.g.Close()
+
+	// The wheel worker drains the ordered wheel queue (production only —
+	// headless tests drive processWheelTask directly).
+	go a.wheelWorker()
 
 	// Refresh loop: re-read the session list and mark the preview stale so
 	// the next layout cycle captures fresh pane content. Local tmux calls are

@@ -2093,10 +2093,10 @@ func TestWheelFallbackDiscardedAfterLeavingFullscreen(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.fullscreen.Enter("devbox")
 	fsGen := app.fullscreenGen.Load()
-	assert.True(t, app.wheelFallbackCurrent(fsGen, app.wheelGen.Load(), "devbox"))
+	assert.True(t, app.wheelFallbackCurrent(fsGen, app.wheelExitGen.Load(), "devbox"))
 
 	app.exitFullScreen()
-	assert.False(t, app.wheelFallbackCurrent(fsGen, app.wheelGen.Load(), "devbox"), "a fallback from the previous fullscreen session must be discarded")
+	assert.False(t, app.wheelFallbackCurrent(fsGen, app.wheelExitGen.Load(), "devbox"), "a fallback from the previous fullscreen session must be discarded")
 }
 
 func TestScrollHintNotInheritedByRecycledID(t *testing.T) {
@@ -2226,12 +2226,12 @@ func TestWheelFallbackRejectedAfterScrollModeToggle(t *testing.T) {
 	require.NoError(t, app.layout(app.g))
 
 	fsGen := app.fullscreenGen.Load()
-	wGen := app.wheelGen.Load()
+	exitGen := app.wheelExitGen.Load()
 	// The user enters and exits scroll mode while the flags query is in
 	// flight — the pending fallback must not re-enter it.
 	app.enterScrollMode()
 	app.exitScrollMode()
-	assert.False(t, app.wheelFallbackCurrent(fsGen, wGen, "devbox"),
+	assert.False(t, app.wheelFallbackCurrent(fsGen, exitGen, "devbox"),
 		"a fallback from before the scroll-mode toggle must be discarded")
 }
 
@@ -2254,4 +2254,51 @@ func TestWheelForwardDiscardedAfterScrollModeEnter(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, wheelIgnored, d)
 	assert.Empty(t, p.wheelSnapshot(), "no input may be forwarded after scroll mode was entered")
+}
+
+// --- Copilot round-18 fixes: ordered wheel processing ---
+
+func TestWheelQueueProcessesInArrivalOrder(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+
+	tasks := []wheelTask{
+		{target: "devbox", delta: -3, hasPos: true, x: 1, y: 1},
+		{target: "devbox", delta: 3, hasPos: true, x: 1, y: 1},
+	}
+	for i := range tasks {
+		app.enqueueWheelTask(tasks[i])
+	}
+	for range tasks {
+		app.processWheelTask(<-app.wheelQueue)
+	}
+
+	ws := p.wheelSnapshot()
+	require.Len(t, ws, 2)
+	assert.True(t, ws[0].up, "the first gesture must forward first")
+	assert.False(t, ws[1].up, "the second gesture must forward second")
+}
+
+func TestFallbackGesturesSurviveEntryBump(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	fsGen := app.fullscreenGen.Load()
+	exitGen := app.wheelExitGen.Load()
+	// Three queued wheel-ups: the first enters scroll mode; the others must
+	// still apply their deltas instead of being discarded by the entry bump.
+	for i := 0; i < 3; i++ {
+		app.enqueueWheelTask(wheelTask{target: "devbox", fsGen: fsGen, exitGen: exitGen, delta: -3})
+	}
+	for i := 0; i < 3; i++ {
+		task := <-app.wheelQueue
+		d, err := app.decideFullscreenWheel(task.target, task.fsGen, task.wGen, task.delta, task.x, task.y, task.hasPos)
+		require.NoError(t, err)
+		app.applyWheelFallbackIfCurrent(task, d, err)
+	}
+	assert.True(t, app.scroll.IsActive())
+	assert.Equal(t, 9, app.scroll.offsetFromBottom, "every queued gesture must accumulate in order")
 }
