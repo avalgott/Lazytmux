@@ -410,6 +410,13 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 			a.g.Update(func(*gocui.Gui) error { return nil })
 			return
 		}
+		// Positionless events come from the global binding (the mouse is
+		// over the status bar, not the pane). The view-scoped "main"
+		// binding covers every wheel event actually over the pane — ignore
+		// these rather than forwarding at the pane cursor.
+		if !hasPos {
+			return
+		}
 		// The tmux round-trips run off the event loop: each can block for
 		// the client timeout, and queuing wheel input must not freeze the UI.
 		// The target and fullscreen generation are captured up front — the
@@ -462,9 +469,12 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 func (a *App) decideFullscreenWheel(target string, fsGen uint64, delta, x, y int, hasPos bool) (wheelDecision, error) {
 	alt, mouse, cx, cy, err := a.svc.PaneInputFlags(context.Background(), target)
 	if err == nil && alt && mouse {
-		// The user may have left this fullscreen session while the flags
-		// query was in flight — do not inject input into a pane that is no
-		// longer on screen.
+		// The generation check and the send are serialized with fullscreen
+		// transitions by fsMu: exit cannot race with injection — either the
+		// send completes before the exit, or the exit lands first and the
+		// check discards the event.
+		a.fsMu.Lock()
+		defer a.fsMu.Unlock()
 		if a.fullscreenGen.Load() != fsGen {
 			return wheelIgnored, nil
 		}

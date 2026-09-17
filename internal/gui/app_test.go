@@ -36,7 +36,8 @@ type fakeProvider struct {
 	wheelErr     error               // error for ForwardMouseWheel only
 	cursorX      int
 	cursorY      int
-	wheels       []wheelCall // recorded ForwardMouseWheel calls
+	wheels       []wheelCall   // recorded ForwardMouseWheel calls
+	wheelBlock   chan struct{} // when set, ForwardMouseWheel blocks until closed
 	err          error
 }
 
@@ -105,6 +106,9 @@ func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, 
 }
 
 func (f *fakeProvider) ForwardMouseWheel(_ context.Context, name string, up bool, x, y int) error {
+	if f.wheelBlock != nil {
+		<-f.wheelBlock
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.wheels = append(f.wheels, wheelCall{name: name, up: up, x: x, y: y})
@@ -2163,4 +2167,48 @@ func TestWheelForwardDiscardedAfterLeavingFullscreen(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, wheelIgnored, d)
 	assert.Empty(t, p.wheelSnapshot(), "no input may be injected into a pane after leaving its fullscreen session")
+}
+
+// --- Copilot round-15 fixes ---
+
+func TestPositionlessFullscreenWheelIgnored(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, cursorX: 10, cursorY: 5}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+
+	// A global wheel event (mouse over the status bar) has no position:
+	// nothing may be forwarded at the pane cursor.
+	app.wheel(-3, 0, 0, false)
+	assert.Empty(t, p.wheelSnapshot(), "positionless fullscreen events must not inject input")
+	assert.False(t, app.scroll.IsActive())
+}
+
+func TestExitSerializedWithInFlightForward(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, wheelBlock: make(chan struct{})}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.fullscreen.Enter("devbox")
+
+	sendDone := make(chan struct{})
+	go func() {
+		_, _ = app.decideFullscreenWheel("devbox", app.fullscreenGen.Load(), -3, 0, 0, false)
+		close(sendDone)
+	}()
+	// Give the decide goroutine time to reach the blocked send.
+	time.Sleep(50 * time.Millisecond)
+
+	exitDone := make(chan struct{})
+	go func() {
+		app.exitFullScreen()
+		close(exitDone)
+	}()
+	select {
+	case <-exitDone:
+		t.Fatal("exit must wait for the in-flight forward to finish")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(p.wheelBlock)
+	<-sendDone
+	<-exitDone
 }

@@ -78,6 +78,7 @@ type App struct {
 	// so the status bar can say so and the wheel forwards to the pane.
 	fullscreenNoScrollback bool
 	fullscreenGen          atomic.Uint64 // bumped on enter/exit; async callbacks compare against it
+	fsMu                   sync.Mutex    // serializes wheel injection with fullscreen transitions
 	lastResizeW            int           // and the size it was resized to
 	lastResizeH            int
 	logs                   []logEntry  // recent status/error messages, shown in the logs panel
@@ -368,6 +369,8 @@ func (a *App) enterFullScreen() {
 	if sess == nil {
 		return
 	}
+	a.fsMu.Lock()
+	defer a.fsMu.Unlock()
 	a.scroll.Exit()
 	a.previewScroll.Exit()
 	a.previewScrollTarget = ""
@@ -384,6 +387,8 @@ func (a *App) enterFullScreen() {
 
 // exitFullScreen returns to the dashboard layout.
 func (a *App) exitFullScreen() {
+	a.fsMu.Lock()
+	defer a.fsMu.Unlock()
 	a.scroll.Exit()
 	a.fullscreen.Exit()
 	a.fullscreenNoScrollback = false
