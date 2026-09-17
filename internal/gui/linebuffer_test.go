@@ -259,3 +259,15 @@ func TestLineBufferReverseScrollDoesNotDuplicate(t *testing.T) {
 	assert.Equal(t, []string{"L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"}, snap,
 		"reverse scrolling must not duplicate the re-revealed lines")
 }
+
+func TestLineBufferReverseScrollMultiRowOverlap(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b", "c", "d", "e"))
+	b.Feed(screen("b", "c", "d", "e", "f"))
+	b.Feed(screen("c", "d", "e", "f", "g"))
+	// Reverse scroll by two: the re-revealed head overlaps the two-line
+	// history prefix on BOTH rows and must not duplicate either.
+	b.Feed(screen("a", "b", "c", "d", "e"))
+	assert.Equal(t, []string{"a", "b", "c", "d", "e"}, b.Snapshot(),
+		"a two-row overlap must dedupe the whole overlapping head")
+}

@@ -113,9 +113,13 @@ func (b *LineBuffer) update(scr []string) []string {
 	// its top lines): drop the duplicated head of scr.
 	if len(b.lines) >= prev {
 		prefix := b.lines[:len(b.lines)-prev]
+		// The largest suffix of the history prefix that equals the head of
+		// the new screen is one shared region: drop the duplicated head.
 		ov := 0
-		for ov < len(scr) && ov < len(prefix) && scr[ov] == prefix[len(prefix)-1-ov] {
-			ov++
+		for k := 1; k <= len(prefix) && k <= len(scr); k++ {
+			if slices.Equal(prefix[len(prefix)-k:], scr[:k]) {
+				ov = k
+			}
 		}
 		return capLines(append(append([]string(nil), prefix...), scr[ov:]...), b.cap)
 	}

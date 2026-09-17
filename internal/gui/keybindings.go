@@ -536,9 +536,15 @@ func (a *App) processWheelTask(t wheelTask) {
 	// must not each wait for the client timeout. wGen is deliberately
 	// omitted — queued fallback gestures survive the fallback-driven scroll
 	// entry bump.
+	// The fullscreen state is event-loop owned: read it under fsMu (enter
+	// and exit hold the same lock) so the worker never races the UI.
+	a.fsMu.Lock()
+	active := a.fullscreen.IsActive()
+	target := a.fullscreen.Target()
+	a.fsMu.Unlock()
 	if a.fullscreenGen.Load() != t.fsGen || a.wheelExitGen.Load() != t.exitGen ||
 		a.sessionGen.Load() != t.sGen || a.userScrollGen.Load() != t.uGen ||
-		!a.fullscreen.IsActive() || a.fullscreen.Target() != t.target {
+		!active || target != t.target {
 		return
 	}
 	d, actErr := a.decideFullscreenWheel(t.target, t.fsGen, t.wGen, t.sGen, t.delta, t.x, t.y, t.hasPos)
