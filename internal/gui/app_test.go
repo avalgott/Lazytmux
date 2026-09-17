@@ -39,6 +39,7 @@ type fakeProvider struct {
 	wheels       []wheelCall   // recorded ForwardMouseWheel calls
 	wheelBlock   chan struct{} // when set, ForwardMouseWheel blocks until closed
 	wheelStarted chan struct{} // when set, signaled when ForwardMouseWheel is entered
+	flagsCalls   int           // PaneInputFlags invocation count
 	err          error
 }
 
@@ -103,6 +104,7 @@ func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string) (session.P
 func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, int, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.flagsCalls++
 	return f.altOn, f.sgrMouse, f.cursorX, f.cursorY, f.err
 }
 
@@ -2531,4 +2533,30 @@ func TestStaleIgnoredWheelDoesNotAlterUserEnteredScroll(t *testing.T) {
 
 	app.applyWheelIgnoredIfScrolling(down)
 	assert.Equal(t, 0, app.scroll.offsetFromBottom, "a stale queued event must not move the user's own scroll view")
+}
+
+// --- Copilot round-27 fixes ---
+
+func TestStaleWheelTaskSkippedBeforeTmux(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
+	app.fullscreen.Enter("devbox")
+
+	task := wheelTask{
+		target:  "devbox",
+		fsGen:   app.fullscreenGen.Load(),
+		wGen:    app.wheelGen.Load(),
+		exitGen: app.wheelExitGen.Load(),
+		sGen:    app.sessionGen.Load(),
+		uGen:    app.userScrollGen.Load(),
+		delta:   -3,
+	}
+	app.exitFullScreen() // the task is now stale
+	app.processWheelTask(task)
+
+	p.mu.Lock()
+	n := p.flagsCalls
+	p.mu.Unlock()
+	assert.Zero(t, n, "a stale task must not run the blocking flags query")
 }

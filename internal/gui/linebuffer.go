@@ -204,7 +204,10 @@ func capLines(lines []string, cap int) []string {
 	if len(lines) <= cap {
 		return lines
 	}
-	// Clip the excess capacity: a plain re-slice would keep the discarded
-	// string references alive in the backing array for the buffer's lifetime.
-	return slices.Clip(lines[len(lines)-cap:])
+	// Copy the retained tail into a fresh array: Clip alone only trims the
+	// slice's capacity and would keep the discarded backing array (and its
+	// string references) alive until the next reallocation.
+	out := make([]string, cap)
+	copy(out, lines[len(lines)-cap:])
+	return out
 }

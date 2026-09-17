@@ -531,6 +531,16 @@ func (a *App) wheelWorker() {
 // processWheelTask runs one wheel event: the tmux queries off the event
 // loop, the state change marshaled back onto it.
 func (a *App) processWheelTask(t wheelTask) {
+	// Drop obviously-stale tasks before any tmux call: after leaving or
+	// recreating a session (or resizing), a full queue of obsolete events
+	// must not each wait for the client timeout. wGen is deliberately
+	// omitted — queued fallback gestures survive the fallback-driven scroll
+	// entry bump.
+	if a.fullscreenGen.Load() != t.fsGen || a.wheelExitGen.Load() != t.exitGen ||
+		a.sessionGen.Load() != t.sGen || a.userScrollGen.Load() != t.uGen ||
+		!a.fullscreen.IsActive() || a.fullscreen.Target() != t.target {
+		return
+	}
 	d, actErr := a.decideFullscreenWheel(t.target, t.fsGen, t.wGen, t.sGen, t.delta, t.x, t.y, t.hasPos)
 	if d == wheelForwarded {
 		return
