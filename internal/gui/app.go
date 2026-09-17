@@ -77,6 +77,7 @@ type App struct {
 	// tmux scrollback history (alternate-screen programs like Claude Code),
 	// so the status bar can say so and the wheel forwards to the pane.
 	fullscreenNoScrollback bool
+	fullscreenIdent        string         // identity of the fullscreen target (a recreation must drop scroll mode)
 	fullscreenGen          atomic.Uint64  // bumped on enter/exit; async callbacks compare against it
 	wheelGen               atomic.Uint64  // bumped on scroll-mode transitions; stale forwards compare against it
 	wheelExitGen           atomic.Uint64  // bumped on scroll-mode exit; stale fallbacks compare against it
@@ -318,9 +319,21 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 		a.sessionGen.Add(1)
 		// The per-target fullscreen caches are keyed by name: a same-name
 		// recreation must not inherit the dead pane's verdicts or skip the
-		// replacement window's resize.
+		// replacement window's resize, and an already-loaded scroll mode
+		// must not keep showing the old session's frozen snapshot.
 		a.lastResizeName = ""
 		a.fullscreenNoScrollback = false
+		if a.fullscreen.IsActive() {
+			for _, s := range a.sessions {
+				if s.Name == a.fullscreen.Target() {
+					if ident := sessionIdentity(s); a.fullscreenIdent != "" && ident != a.fullscreenIdent {
+						a.fullscreenIdent = ident
+						a.scroll.Exit()
+					}
+					break
+				}
+			}
+		}
 	}
 	for name := range a.buffers {
 		found := false
@@ -346,6 +359,7 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 					delete(a.bufferIDs, name)
 					delete(a.bufferGens, name)
 					delete(a.bufferIdentities, name)
+					delete(a.paneIDs, name)
 				} else {
 					a.bufferIDs[name] = identity
 				}
@@ -357,6 +371,25 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 			delete(a.bufferIDs, name)
 			delete(a.bufferGens, name)
 			delete(a.bufferIdentities, name)
+			delete(a.paneIDs, name)
+		}
+	}
+	// Pane metadata prunes independently of buffers: a recreated session
+	// (or one whose old captures never created a buffer) must not keep its
+	// predecessor's pane ID, or wheel validation would reject the new pane
+	// until another live capture happens.
+	for name := range a.paneIDs {
+		found := false
+		for _, s := range a.sessions {
+			if s.Name == name {
+				found = true
+				if a.sessionIdentities[name] != "" && a.sessionIdentities[name] != sessionIdentity(s) {
+					delete(a.paneIDs, name)
+				}
+				break
+			}
+		}
+		if !found {
 			delete(a.paneIDs, name)
 		}
 	}
@@ -431,6 +464,7 @@ func (a *App) enterFullScreen() {
 	a.scrollHintMsg = ""
 	a.scrollHintUntil = time.Time{}
 	a.preview.Invalidate()
+	a.fullscreenIdent = sessionIdentity(*sess)
 	a.fullscreen.Enter(sess.Name)
 }
 
@@ -441,6 +475,7 @@ func (a *App) exitFullScreen() {
 	a.scroll.Exit()
 	a.fullscreen.Exit()
 	a.fullscreenNoScrollback = false
+	a.fullscreenIdent = ""
 	a.fullscreenGen.Add(1)
 	a.preview.Invalidate()
 }

@@ -201,7 +201,7 @@ func (a *App) restartScrollLoad() {
 // and target pair in a goroutine; the single atomic tmux capture runs
 // outside the event loop, and only the latest load applies. apply is the
 // mode-specific event-loop applier.
-func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(seq int64, sGen uint64, paneID string, lines []string, paneH int, loadErr error)) {
+func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(seq int64, sGen uint64, paneID, fetchRecorded string, lines []string, paneH int, loadErr error)) {
 	if target == "" || !ss.IsActive() {
 		return
 	}
@@ -211,20 +211,20 @@ func (a *App) restartScrollLoadState(ss *ScrollState, target string, apply func(
 	seq := ss.seq
 	sGen := a.sessionGen.Load()
 	go func() {
-		lines, paneH, paneID, err := a.fetchScrollSnapshot(target, width)
+		lines, paneH, paneID, fetchRecorded, err := a.fetchScrollSnapshot(target, width)
 		if err != nil {
-			a.finishScrollLoadFor(apply, seq, sGen, paneID, nil, 0, err)
+			a.finishScrollLoadFor(apply, seq, sGen, paneID, fetchRecorded, nil, 0, err)
 			return
 		}
-		a.finishScrollLoadFor(apply, seq, sGen, paneID, lines, paneH, nil)
+		a.finishScrollLoadFor(apply, seq, sGen, paneID, fetchRecorded, lines, paneH, nil)
 	}()
 }
 
 // finishScrollLoadFor applies a snapshot load (or its failure) on the event
 // loop via the given mode-specific applier.
-func (a *App) finishScrollLoadFor(apply func(seq int64, sGen uint64, paneID string, lines []string, paneH int, loadErr error), seq int64, sGen uint64, paneID string, lines []string, paneH int, loadErr error) {
+func (a *App) finishScrollLoadFor(apply func(seq int64, sGen uint64, paneID, fetchRecorded string, lines []string, paneH int, loadErr error), seq int64, sGen uint64, paneID, fetchRecorded string, lines []string, paneH int, loadErr error) {
 	a.g.Update(func(*gocui.Gui) error {
-		apply(seq, sGen, paneID, lines, paneH, loadErr)
+		apply(seq, sGen, paneID, fetchRecorded, lines, paneH, loadErr)
 		return nil
 	})
 }
@@ -236,7 +236,7 @@ func (a *App) finishScrollLoadFor(apply func(seq int64, sGen uint64, paneID stri
 // history beyond the visible screen (alternate-screen panes like Claude Code
 // have no saved history at all) leaves scroll mode too, with the
 // no-scrollback hint.
-func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID string, lines []string, paneH int, loadErr error) {
+func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID, fetchRecorded string, lines []string, paneH int, loadErr error) {
 	// A session recreated under the same name while the capture was in
 	// flight must not receive the old pane's snapshot. When the rejection
 	// hits the latest load, restart it under the current generation — the
@@ -264,7 +264,7 @@ func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID string, lines []str
 	// the CURRENT load may rebind — a stale one must not touch the new
 	// target's pane or buffer.
 	if !a.paneMatches(a.fullscreen.Target(), paneID) {
-		a.rebindPane(a.fullscreen.Target(), paneID)
+		a.adoptPaneIfStale(a.fullscreen.Target(), fetchRecorded, paneID)
 	}
 	if noHistory {
 		a.fullscreenNoScrollback = true
@@ -322,14 +322,17 @@ func (a *App) exitScrollMode() {
 // real pane history when it has any, else the synthetic buffer accumulated
 // from observed captures (alternate-screen panes keep no tmux history).
 // Lines are truncated to the given width. Safe to run from a goroutine.
-func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, string, error) {
+func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, string, string, error) {
 	preview, err := a.svc.CaptureScrollback(context.Background(), target)
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, "", "", err
 	}
 	lines := splitScrollback(preview.Content, width)
+	a.buffersMu.Lock()
+	recorded := a.paneIDs[target]
+	a.buffersMu.Unlock()
 	if len(lines) > preview.PaneHeight {
-		return lines, preview.PaneHeight, preview.PaneID, nil // real tmux history
+		return lines, preview.PaneHeight, preview.PaneID, recorded, nil // real tmux history
 	}
 	// No tmux history: fall back to the synthetic buffer. bufferLookup does
 	// not create — an empty buffer must not exist for every attempted scroll.
@@ -340,19 +343,21 @@ func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, stri
 	// to a specific pane: if the active pane changed since it was recorded,
 	// its history must not be shown under the new pane.
 	if b := a.bufferLookup(target); b != nil {
-		if a.paneMatches(target, preview.PaneID) {
+		if recorded == "" || recorded == preview.PaneID {
 			if snap, screenH := b.SnapshotWithHeight(); len(snap) > screenH {
-				return truncateLines(snap, width), screenH, preview.PaneID, nil
+				return truncateLines(snap, width), screenH, preview.PaneID, recorded, nil
 			}
 		}
 	}
-	return lines, preview.PaneHeight, preview.PaneID, nil // nothing to browse — hint path
+	return lines, preview.PaneHeight, preview.PaneID, recorded, nil // nothing to browse — hint path
 }
 
-// rebindPane adopts a pane observed by a scrollback capture as the session's
-// live pane (a pane switch before scrolling means no live capture will
-// update the binding while browsing). The old pane's buffer is dropped.
-func (a *App) rebindPane(name, paneID string) {
+// adoptPaneIfStale adopts the pane a scrollback capture observed as the
+// session's live pane — but only when the binding is still the one seen at
+// fetch time. A concurrent live capture that recorded a NEWER pane in
+// between wins: the stale snapshot must not overwrite it or drop its
+// buffer. The check and the adoption are one critical section.
+func (a *App) adoptPaneIfStale(name, fetchRecorded, paneID string) {
 	if paneID == "" {
 		return
 	}
@@ -360,7 +365,10 @@ func (a *App) rebindPane(name, paneID string) {
 	defer a.fsMu.Unlock()
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
-	if a.paneIDs[name] != "" && a.paneIDs[name] != paneID {
+	if a.paneIDs[name] != fetchRecorded {
+		return // a newer capture rebound the pane — this snapshot is stale
+	}
+	if fetchRecorded != "" {
 		delete(a.buffers, name)
 		delete(a.bufferIDs, name)
 		delete(a.bufferGens, name)
@@ -509,7 +517,7 @@ func (a *App) restartPreviewScrollLoad() {
 // A snapshot with no history beyond the visible screen (alternate-screen
 // panes like Claude Code) returns to the live capture with a status note
 // instead: there is nothing to browse.
-func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID string, lines []string, paneH int, loadErr error) {
+func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID, fetchRecorded string, lines []string, paneH int, loadErr error) {
 	if a.sessionGen.Load() != sGen {
 		// Same dead end as the fullscreen applier: restart the load under
 		// the current generation instead of stranding the loading panel.
@@ -533,7 +541,7 @@ func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID string, line
 	// the CURRENT load may rebind — a stale one must not touch the new
 	// target's pane or buffer.
 	if !a.paneMatches(a.previewScrollTarget, paneID) {
-		a.rebindPane(a.previewScrollTarget, paneID)
+		a.adoptPaneIfStale(a.previewScrollTarget, fetchRecorded, paneID)
 	}
 	if noHistory {
 		name := a.previewScrollTarget
