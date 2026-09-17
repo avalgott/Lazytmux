@@ -249,12 +249,6 @@ func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID string, lines []str
 		}
 		return
 	}
-	// The freshly captured tmux snapshot is authoritative for its pane: a
-	// pane switch just before scrolling must rebind the session to it, not
-	// reject the load forever (no live captures run while browsing).
-	if !a.paneMatches(a.fullscreen.Target(), paneID) {
-		a.rebindPane(a.fullscreen.Target(), paneID)
-	}
 	applied, noHistory, err := a.applyScrollLoadState(a.scroll, seq, lines, paneH, loadErr)
 	if err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))
@@ -263,6 +257,14 @@ func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID string, lines []str
 	}
 	if !applied {
 		return // superseded or the mode already exited — leave the hint alone
+	}
+	// The freshly captured tmux snapshot is authoritative for its pane: a
+	// pane switch just before scrolling must rebind the session to it, not
+	// reject the load forever (no live captures run while browsing). Only
+	// the CURRENT load may rebind — a stale one must not touch the new
+	// target's pane or buffer.
+	if !a.paneMatches(a.fullscreen.Target(), paneID) {
+		a.rebindPane(a.fullscreen.Target(), paneID)
 	}
 	if noHistory {
 		a.fullscreenNoScrollback = true
@@ -516,12 +518,6 @@ func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID string, line
 		}
 		return
 	}
-	// The freshly captured tmux snapshot is authoritative for its pane: a
-	// pane switch just before scrolling must rebind the session to it, not
-	// reject the load forever (no live captures run while browsing).
-	if !a.paneMatches(a.previewScrollTarget, paneID) {
-		a.rebindPane(a.previewScrollTarget, paneID)
-	}
 	applied, noHistory, err := a.applyScrollLoadState(a.previewScroll, seq, lines, paneH, loadErr)
 	if err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))
@@ -530,6 +526,14 @@ func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID string, line
 	}
 	if !applied {
 		return // superseded or the mode already exited
+	}
+	// The freshly captured tmux snapshot is authoritative for its pane: a
+	// pane switch just before scrolling must rebind the session to it, not
+	// reject the load forever (no live captures run while browsing). Only
+	// the CURRENT load may rebind — a stale one must not touch the new
+	// target's pane or buffer.
+	if !a.paneMatches(a.previewScrollTarget, paneID) {
+		a.rebindPane(a.previewScrollTarget, paneID)
 	}
 	if noHistory {
 		name := a.previewScrollTarget

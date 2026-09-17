@@ -2720,3 +2720,35 @@ func TestPaneSwitchBeforeScrollingRebindsAndApplies(t *testing.T) {
 	app.buffersMu.Unlock()
 	assert.Equal(t, "%2", rebound, "the pane observed by the capture rebinds the session")
 }
+
+// --- Copilot round-38 fix ---
+
+func TestStalePreviewLoadDoesNotRebindPane(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}, {Name: "other", ID: "$2", Created: 100}}
+	app.cursor = 0
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+
+	// The new target has its own recorded pane and a buffer.
+	app.renderPreviewCapture("other", 0, app.sessionGen.Load(), session.Preview{Content: "O", Full: "O", PaneID: "%2"}, nil)
+	app.feedBuffer("other", "other-history")
+
+	// Enter and exit scrolling, then re-enter for another session.
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(20, 78)
+	oldSeq := app.previewScroll.seq
+	app.exitPreviewScroll()
+	app.cursor = 1
+	app.previewScrollTarget = "other"
+	app.previewScroll.Enter(20, 78)
+
+	// A stale load from the previous session must not rebind "other" to the
+	// old pane or discard its buffer.
+	app.applyPreviewScrollLoad(oldSeq, app.sessionGen.Load(), "%9", make([]string, 25), 5, nil)
+	app.buffersMu.Lock()
+	recorded := app.paneIDs["other"]
+	_, hasBuffer := app.buffers["other"]
+	app.buffersMu.Unlock()
+	assert.Equal(t, "%2", recorded, "a stale load must not rebind the new target's pane")
+	assert.True(t, hasBuffer, "a stale load must not discard the new target's buffer")
+}
