@@ -1492,7 +1492,7 @@ func TestPreviewTitleShowsScrollHint(t *testing.T) {
 	app.cursor = 0
 	app.scrollHintName = "devbox"
 	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
-	app.scrollHintIdent = "@0" // ID and Created both default to empty/0
+	app.scrollHintIdent = "@0@0" // ID, Created and PID default to empty/0
 	app.scrollHintUntil = time.Now().Add(time.Minute)
 
 	require.NoError(t, app.layout(app.g))
@@ -1522,7 +1522,7 @@ func TestPreviewTitleHintWrongSession(t *testing.T) {
 	app.cursor = 0
 	app.scrollHintName = "other"
 	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
-	app.scrollHintIdent = "other@0"
+	app.scrollHintIdent = "other@0@0"
 	app.scrollHintUntil = time.Now().Add(time.Minute)
 
 	require.NoError(t, app.layout(app.g))
@@ -1871,7 +1871,7 @@ func TestScrollHintBoundToSessionID(t *testing.T) {
 	app.cursor = 0
 	app.scrollHintName = "devbox"
 	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
-	app.scrollHintIdent = "$1@100" // the hint belongs to the previous incarnation
+	app.scrollHintIdent = "$1@100@0" // the hint belongs to the previous incarnation
 	app.scrollHintUntil = time.Now().Add(time.Minute)
 
 	require.NoError(t, app.layout(app.g))
@@ -1884,7 +1884,7 @@ func TestPreviewScrollExitsWhenSessionIDChanges(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1"}}
 	app.previewScrollTarget = "devbox"
-	app.previewScrollTargetID = "$1"
+	app.previewScrollTargetID = "$1@0@0"
 	app.previewScroll.Enter(10, 78)
 
 	// Same name, recreated session: the frozen snapshot belongs to the dead
@@ -2070,7 +2070,7 @@ func TestApplyNoHistoryHintPlain(t *testing.T) {
 	app.applyNoHistoryHint("devbox", false, false, false)
 	assert.False(t, app.previewScroll.IsActive())
 	assert.Equal(t, "devbox", app.scrollHintName)
-	assert.Equal(t, "$1@0", app.scrollHintIdent)
+	assert.Equal(t, "$1@0@0", app.scrollHintIdent)
 	require.NotEmpty(t, app.logs)
 	assert.NotContains(t, app.logs[len(app.logs)-1].msg, "Hit Enter")
 }
@@ -2105,7 +2105,7 @@ func TestScrollHintNotInheritedByRecycledID(t *testing.T) {
 	app.cursor = 0
 	app.scrollHintName = "devbox"
 	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
-	app.scrollHintIdent = "$0@100" // same ID, previous server incarnation
+	app.scrollHintIdent = "$0@100@0" // same ID, previous server incarnation
 	app.scrollHintUntil = time.Now().Add(time.Minute)
 
 	require.NoError(t, app.layout(app.g))
@@ -2147,7 +2147,7 @@ func TestPreviewScrollExitsOnRecycledID(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox", ID: "$0", Created: 100}}
 	app.previewScrollTarget = "devbox"
-	app.previewScrollTargetID = "$0@100"
+	app.previewScrollTargetID = "$0@100@0"
 	app.previewScroll.Enter(10, 78)
 
 	// Same name, same recycled ID, new creation time: a different session.
@@ -2367,4 +2367,29 @@ func TestFullscreenScrollLoadRejectedAfterRecreation(t *testing.T) {
 
 	app.applyScrollLoad(seq, sGen, make([]string, 25), 20, nil)
 	assert.False(t, app.scroll.loaded, "a stale fullscreen load must not install the old pane's snapshot")
+}
+
+// --- Copilot round-21 fixes ---
+
+func TestSessionGenAdvancesOnServerRestart(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 100, ServerPID: 1111}}, nil)
+	gen := app.sessionGen.Load()
+
+	// A same-second restart recycles the ID and the creation second — only
+	// the server PID distinguishes the incarnations.
+	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 100, ServerPID: 2222}}, nil)
+	assert.NotEqual(t, gen, app.sessionGen.Load(), "a server restart must invalidate even with recycled ID and same-second creation")
+}
+
+func TestResizeInvalidatesQueuedWheelWork(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	require.NoError(t, app.layout(app.g))
+
+	wGen := app.wheelGen.Load()
+	exitGen := app.wheelExitGen.Load()
+	app.lastWidth = 10 // simulate a geometry change
+	require.NoError(t, app.layout(app.g))
+	assert.NotEqual(t, wGen, app.wheelGen.Load(), "a resize invalidates queued wheel forwards")
+	assert.NotEqual(t, exitGen, app.wheelExitGen.Load(), "a resize invalidates queued wheel fallbacks")
 }

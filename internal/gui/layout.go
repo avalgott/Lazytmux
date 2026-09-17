@@ -112,6 +112,10 @@ func (a *App) layout(g *gocui.Gui) error {
 		a.preview.Invalidate()
 		a.lastWidth = maxX
 		a.lastHeight = maxY
+		// Queued wheel work was captured for the old geometry: invalidate
+		// forwards and fallbacks alike so the resize reset holds.
+		a.wheelGen.Add(1)
+		a.wheelExitGen.Add(1)
 		blankScreen(g, maxX, maxY)
 		// The scroll viewport dimensions are tied to the pane geometry;
 		// leave scroll mode so the next entry recomputes them at the new

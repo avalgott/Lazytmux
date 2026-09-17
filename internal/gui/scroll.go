@@ -3,7 +3,6 @@ package gui
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -396,8 +395,7 @@ func (a *App) enterPreviewScroll() {
 	}
 	// A recent no-scrollback verdict for this session is still valid: skip
 	// the expensive whole-history load while the hint is showing.
-	ident := sess.ID + "@" + strconv.FormatInt(sess.Created, 10)
-	if a.scrollHintIdent != "" && a.scrollHintName == sess.Name && a.scrollHintIdent == ident && time.Now().Before(a.scrollHintUntil) {
+	if a.scrollHintIdent != "" && a.scrollHintName == sess.Name && a.scrollHintIdent == sessionIdentity(*sess) && time.Now().Before(a.scrollHintUntil) {
 		return
 	}
 	v, err := a.g.View("main")
@@ -413,7 +411,7 @@ func (a *App) enterPreviewScroll() {
 		width = 1
 	}
 	a.previewScrollTarget = sess.Name
-	a.previewScrollTargetID = sess.ID + "@" + strconv.FormatInt(sess.Created, 10)
+	a.previewScrollTargetID = sessionIdentity(*sess)
 	a.previewScroll.Enter(viewH, width)
 	a.restartPreviewScrollLoad()
 }
@@ -491,7 +489,7 @@ func (a *App) applyNoHistoryHint(name string, alt, sgr, flagErr bool) {
 	a.scrollHintName = name
 	a.scrollHintIdent = ""
 	if sess := a.currentSession(); sess != nil && sess.Name == name {
-		a.scrollHintIdent = sess.ID + "@" + strconv.FormatInt(sess.Created, 10)
+		a.scrollHintIdent = sessionIdentity(*sess)
 	}
 	a.scrollHintMsg = "No scrollback available."
 	if !flagErr && alt && sgr {

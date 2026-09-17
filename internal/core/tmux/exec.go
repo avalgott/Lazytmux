@@ -238,7 +238,7 @@ func (c *ExecClient) NewSession(ctx context.Context, opts NewSessionOpts) error 
 
 func (c *ExecClient) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 	out, err := c.run(ctx, "list-sessions", "-F",
-		"#{session_name}\t#{session_id}\t#{session_path}\t#{session_attached}\t#{session_windows}\t#{session_created}")
+		"#{session_name}\t#{session_id}\t#{session_path}\t#{session_attached}\t#{session_windows}\t#{session_created}\t#{pid}")
 	if err != nil {
 		return nil, err
 	}
@@ -582,20 +582,22 @@ func parseSessions(out string) []SessionInfo {
 	}
 	var sessions []SessionInfo
 	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(line, "\t", 6)
-		if len(parts) < 6 {
+		parts := strings.SplitN(line, "\t", 7)
+		if len(parts) < 7 {
 			continue
 		}
 		attached := parts[3] != "0"
 		windows, _ := strconv.Atoi(parts[4])
 		created, _ := strconv.ParseInt(parts[5], 10, 64)
+		serverPID, _ := strconv.ParseInt(parts[6], 10, 64)
 		sessions = append(sessions, SessionInfo{
-			Name:     parts[0],
-			ID:       parts[1],
-			Path:     parts[2],
-			Attached: attached,
-			Windows:  windows,
-			Created:  created,
+			Name:      parts[0],
+			ServerPID: serverPID,
+			ID:        parts[1],
+			Path:      parts[2],
+			Attached:  attached,
+			Windows:   windows,
+			Created:   created,
 		})
 	}
 	return sessions

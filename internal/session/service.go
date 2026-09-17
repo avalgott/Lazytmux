@@ -22,12 +22,13 @@ import (
 // session ID and Created its creation time — names and even IDs (after a
 // server restart) can be reused, the pair cannot.
 type Info struct {
-	Name     string
-	ID       string
-	Created  int64
-	Path     string
-	Attached bool
-	Windows  int
+	Name      string
+	ID        string
+	Created   int64
+	ServerPID int64 // the tmux server incarnation (IDs recycle across restarts)
+	Path      string
+	Attached  bool
+	Windows   int
 }
 
 // CreateOpts configures a new tmux session.
@@ -116,12 +117,13 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 	infos := make([]Info, len(sessions))
 	for i, sess := range sessions {
 		infos[i] = Info{
-			Name:     sess.Name,
-			ID:       sess.ID,
-			Created:  sess.Created,
-			Path:     sess.Path,
-			Attached: sess.Attached,
-			Windows:  sess.Windows,
+			Name:      sess.Name,
+			ID:        sess.ID,
+			Created:   sess.Created,
+			ServerPID: sess.ServerPID,
+			Path:      sess.Path,
+			Attached:  sess.Attached,
+			Windows:   sess.Windows,
 		}
 	}
 	sort.Slice(infos, func(i, j int) bool {

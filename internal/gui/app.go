@@ -315,7 +315,7 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 				// current identity if it was fed under the current
 				// generation — otherwise it holds the previous
 				// incarnation's output and is dropped.
-				identity := s.ID + "@" + strconv.FormatInt(s.Created, 10)
+				identity := sessionIdentity(s)
 				if (a.bufferIDs[name] != "" && a.bufferIDs[name] != identity) ||
 					(a.bufferIDs[name] == "" && a.bufferGens[name] != a.sessionGen.Load()) {
 					// The buffer belongs to a dead incarnation: drop it and
@@ -371,7 +371,7 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 		cur, curID := "", ""
 		if sess := a.currentSession(); sess != nil {
 			cur = sess.Name
-			curID = sess.ID + "@" + strconv.FormatInt(sess.Created, 10)
+			curID = sessionIdentity(*sess)
 		}
 		if cur != a.previewScrollTarget || curID != a.previewScrollTargetID {
 			a.previewScroll.Exit()
@@ -544,20 +544,21 @@ func (a *App) bufferLookup(name string) *LineBuffer {
 	return a.buffers[name]
 }
 
+// sessionIdentity is the stable identity of a session incarnation: tmux
+// recycles IDs after a server restart, and Created has second granularity,
+// so the server PID — which changes on every restart — is part of it.
+func sessionIdentity(s session.Info) string {
+	return s.ID + "@" + strconv.FormatInt(s.Created, 10) + "@" + strconv.FormatInt(s.ServerPID, 10)
+}
+
 // sessionListSig is a cheap identity signature of the session list: the
-// name=ID=Created triples joined in list order (the service sorts by name,
-// so the order is stable). It changes exactly when a session appears,
-// disappears, is renamed, or is recreated — the events that invalidate
-// in-flight captures. Created is included because tmux recycles session IDs
-// after a server restart.
+// identities joined in list order (the service sorts by name, so the order
+// is stable). It changes exactly when a session appears, disappears, is
+// renamed, or is recreated — the events that invalidate in-flight captures.
 func sessionListSig(sessions []session.Info) string {
 	var sb strings.Builder
 	for _, s := range sessions {
-		sb.WriteString(s.Name)
-		sb.WriteByte('=')
-		sb.WriteString(s.ID)
-		sb.WriteByte('=')
-		sb.WriteString(strconv.FormatInt(s.Created, 10))
+		sb.WriteString(sessionIdentity(s))
 		sb.WriteByte(';')
 	}
 	return sb.String()
