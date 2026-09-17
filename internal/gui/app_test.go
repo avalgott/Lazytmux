@@ -1488,3 +1488,60 @@ func TestPreviewTitleHintWrongSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, v.Title, "Hit Enter to open the session", "the hint belongs to its own session only")
 }
+
+// --- Copilot review fixes: stale captures and loading-time bottom exits ---
+
+func TestStaleCaptureForOldSessionNotRendered(t *testing.T) {
+	p := &fakeProvider{captured: session.Preview{Content: "A-CONTENT", Full: "A-CONTENT"}}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "session-A"}, {Name: "session-B"}}
+	app.cursor = 0
+
+	// A capture for session-A (index 0) completes...
+	app.renderPreviewCapture("session-A", 0, 80, 24, p.captured, nil)
+
+	// ...after the list changed so index 0 now holds session-B.
+	app.sessions = []session.Info{{Name: "session-B"}}
+	app.cursor = 0
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.NotContains(t, v.Buffer(), "A-CONTENT", "a stale capture must not render under the replacement session")
+}
+
+func TestPreviewScrollMoveDownExitsWhileLoading(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	// Wheel-up accumulated an offset while the snapshot was still loading.
+	app.previewScroll.Move(-3)
+
+	app.focusMain = true
+	require.NoError(t, app.cursorMoveHandler(3)(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive(), "a downward gesture reaching the bottom exits even while loading")
+	assert.Equal(t, "", app.previewScrollTarget)
+}
+
+func TestPageDownExitsWhileLoading(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(20, 78)
+	app.previewScroll.Move(-2) // loading, offset 2
+
+	require.NoError(t, app.pageHandler("PageDown")(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive(), "PageDown reaching the bottom exits even while loading")
+}
+
+func TestWheelDownExitsWhileLoading(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	app.previewScroll.Move(-3) // loading, offset 3
+
+	require.NoError(t, app.wheelHandler(3)(app.g, nil))
+	assert.False(t, app.previewScroll.IsActive(), "wheel-down reaching the bottom exits even while loading")
+}

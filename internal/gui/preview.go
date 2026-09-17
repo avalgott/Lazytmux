@@ -10,6 +10,7 @@ import (
 type PreviewCache struct {
 	mu      sync.Mutex
 	content string    // last successfully captured pane content
+	name    string    // session name the content was captured from
 	cursor  int       // session cursor index when content was captured
 	cursorX int       // tmux pane cursor column
 	cursorY int       // tmux pane cursor row
@@ -25,6 +26,10 @@ func (pc *PreviewCache) Unlock() { pc.mu.Unlock() }
 
 // Content returns the cached pane content. Caller must hold lock.
 func (pc *PreviewCache) Content() string { return pc.content }
+
+// Name returns the session name the cached content belongs to. Caller must
+// hold lock.
+func (pc *PreviewCache) Name() string { return pc.name }
 
 // Cursor returns the session cursor index at capture time. Caller must hold lock.
 func (pc *PreviewCache) Cursor() int { return pc.cursor }
@@ -47,8 +52,9 @@ func (pc *PreviewCache) Stale(threshold time.Duration) bool {
 func (pc *PreviewCache) SetBusy(b bool) { pc.busy = b }
 
 // Update stores the result of a successful capture. Caller must hold lock.
-func (pc *PreviewCache) Update(content string, cursorIdx, cursorX, cursorY int) {
+func (pc *PreviewCache) Update(name, content string, cursorIdx, cursorX, cursorY int) {
 	pc.content = content
+	pc.name = name
 	pc.cursor = cursorIdx
 	pc.cursorX = cursorX
 	pc.cursorY = cursorY

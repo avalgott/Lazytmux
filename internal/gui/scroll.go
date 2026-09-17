@@ -466,7 +466,9 @@ func (a *App) previewScrollMove(delta int) {
 		return // no session, or the main view is missing
 	}
 	a.previewScroll.Move(delta)
-	if a.previewScroll.loaded && a.previewScroll.offsetFromBottom == 0 {
+	// A downward gesture reaching the live bottom returns to the live
+	// capture — loaded or not, so the result is independent of load timing.
+	if a.previewScroll.offsetFromBottom == 0 && delta > 0 {
 		a.exitPreviewScroll()
 		return
 	}

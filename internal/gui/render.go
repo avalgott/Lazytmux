@@ -69,10 +69,11 @@ func (a *App) renderPreview(v *gocui.View) {
 	}
 	a.preview.Lock()
 	cache := a.preview.Content()
+	cacheName := a.preview.Name()
 	cachedCursor := a.preview.Cursor()
 	paneCursorX := a.preview.CursorX()
 	paneCursorY := a.preview.CursorY()
-	needFetch := !a.preview.Busy() && (cachedCursor != a.cursor || a.preview.Stale(staleAfter))
+	needFetch := !a.preview.Busy() && (cacheName != sess.Name || cachedCursor != a.cursor || a.preview.Stale(staleAfter))
 	if needFetch {
 		a.preview.SetBusy(true)
 	}
@@ -87,7 +88,7 @@ func (a *App) renderPreview(v *gocui.View) {
 		}()
 	}
 
-	if cache != "" && cachedCursor == a.cursor {
+	if cache != "" && cacheName == sess.Name && cachedCursor == a.cursor {
 		fmt.Fprint(v, cache)
 		v.SetCursor(clampInt(paneCursorX, 0, previewW-1), clampInt(paneCursorY, 0, previewH-1))
 		return
@@ -109,7 +110,7 @@ func (a *App) renderPreview(v *gocui.View) {
 func (a *App) renderPreviewCapture(name string, cursorSnapshot, previewW, previewH int, result session.Preview, err error) {
 	a.preview.Lock()
 	if err == nil {
-		a.preview.Update(result.Content, cursorSnapshot, result.CursorX, result.CursorY)
+		a.preview.Update(name, result.Content, cursorSnapshot, result.CursorX, result.CursorY)
 	} else {
 		// Failed capture (e.g. session died between refresh cycles) —
 		// mark fetched so we don't retry on every render.

@@ -332,7 +332,9 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 			return nil
 		}
 		a.previewScroll.Page(delta)
-		if a.previewScroll.loaded && a.previewScroll.offsetFromBottom == 0 {
+		// A downward gesture reaching the live bottom returns to the live
+		// capture — loaded or not, so the result is independent of load timing.
+		if a.previewScroll.offsetFromBottom == 0 && delta > 0 {
 			a.exitPreviewScroll()
 			return nil
 		}
@@ -378,7 +380,9 @@ func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 			return nil
 		}
 		a.previewScroll.Move(delta)
-		if a.previewScroll.loaded && a.previewScroll.offsetFromBottom == 0 {
+		// A downward gesture reaching the live bottom returns to the live
+		// capture — loaded or not, so the result is independent of load timing.
+		if a.previewScroll.offsetFromBottom == 0 && delta > 0 {
 			a.exitPreviewScroll()
 			return nil
 		}
