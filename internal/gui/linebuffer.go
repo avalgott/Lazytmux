@@ -78,6 +78,11 @@ func (b *LineBuffer) update(scr []string) []string {
 	if len(b.lines) == 0 {
 		return capLines(scr, b.cap)
 	}
+	// An all-blank screen (e.g. a resize that only changes the number of
+	// blank cursor rows) must not reseed over retained history.
+	if n == 0 && prev == 0 {
+		return capLines(b.lines, b.cap)
+	}
 	tail := b.lines
 	if len(tail) > n {
 		tail = tail[len(tail)-n:]

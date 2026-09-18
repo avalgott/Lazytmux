@@ -317,3 +317,15 @@ func TestLineBufferEqualHeightRedrawNotHistory(t *testing.T) {
 	assert.Equal(t, []string{"d", "x", "y", "z"}, b.Snapshot(),
 		"an equal-height redraw must replace the screen, not manufacture history")
 }
+
+func TestLineBufferBlankScreenKeepsHistory(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("L01", "L02", "L03"))
+	b.Feed(screen("L02", "L03", "L04"))
+	// The screen becomes entirely blank (cursor rows only, possibly resized):
+	// the accumulated history must survive.
+	b.Feed(screen("", ""))
+	b.Feed(screen("", "", ""))
+	assert.Equal(t, []string{"L01", "L02", "L03", "L04"}, b.Snapshot(),
+		"all-blank screens must not erase retained history")
+}
