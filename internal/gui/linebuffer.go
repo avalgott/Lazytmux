@@ -124,8 +124,11 @@ func (b *LineBuffer) update(scr []string) []string {
 	// A size mismatch can also hide a genuine scroll (blank-line stripping
 	// shrinks the screen; an interior blank grows it): when the old tail's
 	// suffix overlaps the new screen's head, the transformation was a scroll
-	// in disguise — append the new portion instead of replacing.
-	if len(b.lines) >= prev {
+	// in disguise — append the new portion instead of replacing. Equal-height
+	// redraws are handled by the shift checks above; an incidental one-row
+	// overlap must not manufacture history, so this path requires a height
+	// change.
+	if n != prev && len(b.lines) >= prev {
 		tail := b.lines[len(b.lines)-prev:]
 		o := 0
 		for k := 1; k <= len(tail) && k <= len(scr); k++ {

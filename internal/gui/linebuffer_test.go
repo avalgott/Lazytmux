@@ -307,3 +307,13 @@ func TestLineBufferConsecutiveReverseScrollsRetainAll(t *testing.T) {
 	want := []string{"L03", "L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"}
 	assert.Equal(t, want, snap, "every newly revealed older row must be retained across consecutive reverse scrolls")
 }
+
+func TestLineBufferEqualHeightRedrawNotHistory(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b", "c", "d"))
+	// An equal-height redraw that incidentally overlaps one row (the tail's
+	// "d" equals the new head's "d") is a redraw, not a scroll.
+	b.Feed(screen("d", "x", "y", "z"))
+	assert.Equal(t, []string{"d", "x", "y", "z"}, b.Snapshot(),
+		"an equal-height redraw must replace the screen, not manufacture history")
+}
