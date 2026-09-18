@@ -430,6 +430,12 @@ func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) 
 // SendMouseWheel emits — and the pane cursor position (0-based). The format
 // is the positional argument, matching ShowMessage — display-message expands
 // format variables there on every tmux version.
+//
+// mouse_any_flag is the aggregate over every tracking mode (1000 standard,
+// 1002 button-event, 1003 any-event), NOT the 1003-only flag — that is
+// mouse_all_flag, which would exclude vim-style 1000/1002 tracking. Verified
+// against a live tmux: 1002+1006 reports any=1 sgr=1 (forward), 1006 alone
+// reports any=0 sgr=1 (do not forward).
 func (c *ExecClient) PaneInputFlags(ctx context.Context, target string) (bool, bool, int, int, string, error) {
 	out, err := c.run(ctx, "display-message", "-t", target, "-p",
 		"#{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{cursor_x} #{cursor_y} #{pane_id}")
@@ -478,7 +484,9 @@ func splitPaneHeightLine(out string) (string, int, string, error) {
 // The mouse result is true only when a tracking mode is enabled AND the SGR
 // (1006) encoding is selected — SGR alone leaves a program that is not
 // listening for mouse events, and any other encoding would not understand
-// the SGR sequences SendMouseWheel emits.
+// the SGR sequences SendMouseWheel emits. mouse_any_flag covers every
+// tracking mode (1000/1002/1003); mouse_all_flag would restrict the check
+// to 1003 and stop forwarding to vim-style 1002-tracking panes.
 func parseInputFlags(s string) (altOn, mouseSGR bool, cx, cy int, paneID string, err error) {
 	fields := strings.Fields(s)
 	if len(fields) != 6 {
