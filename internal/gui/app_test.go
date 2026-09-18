@@ -2537,3 +2537,33 @@ func TestEnterFullScreenWarmsModeSynchronously(t *testing.T) {
 	assert.Equal(t, "devbox", target, "the mode cache warms synchronously on entry")
 	assert.True(t, alt && sgr, "the cached mode reflects the pane's flags")
 }
+
+// --- Copilot round-50 fix ---
+
+func TestPaneModeRefreshRestoresPassthrough(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5"}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+	app.refreshPaneModeSync()
+
+	// Age the cache past the freshness window: the wheel falls back.
+	app.modeMu.Lock()
+	app.modeAt = time.Now().Add(-time.Second)
+	app.modeMu.Unlock()
+	app.wheelHandlerAt(-3, 5, 5)
+	assert.Empty(t, p.wheelSnapshot(), "a stale cache must not inject input")
+	assert.True(t, app.scroll.IsActive(), "the stale cache falls back to scroll mode")
+
+	// The periodic refresh restores passthrough.
+	app.exitScrollMode()
+	app.refreshPaneMode()
+	require.Eventually(t, func() bool {
+		app.modeMu.Lock()
+		defer app.modeMu.Unlock()
+		return time.Since(app.modeAt) < time.Minute
+	}, time.Second, 10*time.Millisecond)
+	app.wheelHandlerAt(-3, 5, 5)
+	require.Len(t, p.wheelSnapshot(), 1, "passthrough must return once the cache is fresh again")
+}

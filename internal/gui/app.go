@@ -226,6 +226,9 @@ func (a *App) Run() error {
 					a.preview.InvalidateTimestamp()
 				}
 				a.preview.Unlock()
+				// Keep the pane-mode cache fresh while fullscreen is live:
+				// the wheel relies on it for the lifetime of the view.
+				a.refreshPaneMode()
 				a.g.Update(func(*gocui.Gui) error { return nil })
 			}
 		}
