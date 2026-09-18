@@ -168,7 +168,6 @@ func (a *App) enterScrollMode() {
 	if !a.fullscreen.IsActive() || a.scroll.IsActive() {
 		return
 	}
-	a.wheelGen.Add(1) // invalidate in-flight wheel forwards
 	target := a.fullscreen.Target()
 	if target == "" {
 		return
@@ -323,8 +322,6 @@ func (a *App) applyScrollLoadState(ss *ScrollState, seq int64, lines []string, p
 
 // exitScrollMode returns to the live fullscreen view.
 func (a *App) exitScrollMode() {
-	a.wheelGen.Add(1)     // invalidate in-flight wheel forwards
-	a.wheelExitGen.Add(1) // invalidate in-flight wheel fallbacks
 	a.scroll.Exit()
 	a.preview.Invalidate()
 	a.g.Update(func(*gocui.Gui) error { return nil })

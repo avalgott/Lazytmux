@@ -329,9 +329,6 @@ func (a *App) toggleScrollHandler(g *gocui.Gui, v *gocui.View) error {
 	if a.scroll.IsActive() {
 		a.exitScrollMode()
 	} else {
-		// The USER entered scroll mode: queued wheel events from before must
-		// not alter this view.
-		a.userScrollGen.Add(1)
 		a.enterScrollMode()
 	}
 	return nil
@@ -400,15 +397,6 @@ func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 func (a *App) wheelHandlerAt(delta, x, y int) {
 	a.wheel(delta, x, y, true)
 }
-
-// wheelDecision is what decideFullscreenWheel concluded.
-type wheelDecision int
-
-const (
-	wheelForwarded wheelDecision = iota // the pane's program received the wheel
-	wheelIgnored                        // nothing to do (wheel-down at the live bottom)
-	wheelFallback                       // enter lazytmux scroll mode instead
-)
 
 func (a *App) wheel(delta, x, y int, hasPos bool) {
 	if a.fullscreen.IsActive() {
@@ -486,179 +474,6 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 	if a.previewScroll.offsetFromBottom == 0 && delta > 0 {
 		a.exitPreviewScroll()
 		return
-	}
-	a.g.Update(func(*gocui.Gui) error { return nil })
-}
-
-// decideFullscreenWheel runs the tmux queries for a live fullscreen wheel
-// event and returns the decision without touching UI state — safe to run
-// from a goroutine.
-func (a *App) decideFullscreenWheel(target string, fsGen, wGen, sGen uint64, delta, x, y int, hasPos bool) (wheelDecision, error) {
-	alt, mouse, cx, cy, paneID, err := a.svc.PaneInputFlags(context.Background(), target)
-	if err == nil && alt && mouse {
-		// The generation checks and the send are serialized with fullscreen
-		// and scroll-mode transitions by fsMu: exit cannot race with
-		// injection, and entering scroll mode (which must suppress pane
-		// input) invalidates the pending forward. The pane the user was
-		// looking at must still be the active one — a pane switch must not
-		// receive input meant for its predecessor. The pane binding is read
-		// UNDER fsMu (fsMu -> buffersMu order), so a live capture cannot
-		// update it between the read and the send.
-		a.fsMu.Lock()
-		defer a.fsMu.Unlock()
-		a.buffersMu.Lock()
-		recorded := a.paneIDs[target]
-		a.buffersMu.Unlock()
-		if a.fullscreenGen.Load() != fsGen || a.wheelGen.Load() != wGen || a.sessionGen.Load() != sGen ||
-			(recorded != "" && recorded != paneID) {
-			return wheelIgnored, nil
-		}
-		if hasPos {
-			cx, cy = x, y
-		}
-		// Send to the VALIDATED pane ID, not the session name: a tmux-side
-		// pane switch between the flags query and the send would otherwise
-		// redirect the injection into the successor pane.
-		sendTarget := target
-		if paneID != "" {
-			sendTarget = paneID
-		}
-		ferr := a.svc.ForwardMouseWheel(context.Background(), sendTarget, delta < 0, cx, cy)
-		if ferr == nil {
-			return wheelForwarded, nil
-		}
-		// A failed forward (dead pane, tmux error) must not be a silent
-		// no-op: fall back to lazytmux scroll mode.
-		return wheelFallback, fmt.Errorf("forward wheel: %v", ferr)
-	}
-	// Wheel-down at the live bottom has nothing to browse; entering would
-	// start a whole-history load that pins at the bottom.
-	if delta > 0 {
-		return wheelIgnored, nil
-	}
-	return wheelFallback, nil
-}
-
-// wheelTask is one queued wheel event, with the generations captured at
-// enqueue time.
-type wheelTask struct {
-	target  string
-	fsGen   uint64
-	wGen    uint64
-	exitGen uint64
-	sGen    uint64 // session generation: a recreated same-name pane must not receive the event
-	uGen    uint64 // user scroll-entry generation: the user's own Ctrl+V invalidates queued events
-	delta   int
-	x, y    int
-	hasPos  bool
-}
-
-// enqueueWheelTask appends a wheel event to the ordered queue; when the
-// queue is full (a very slow tmux), the newest event is dropped rather than
-// blocking the event loop.
-func (a *App) enqueueWheelTask(t wheelTask) {
-	select {
-	case a.wheelQueue <- t:
-	default:
-	}
-}
-
-// wheelWorker drains the wheel queue in arrival order — independent
-// goroutines would let delayed flag queries forward events out of order.
-func (a *App) wheelWorker() {
-	for t := range a.wheelQueue {
-		if a.quitting.Load() {
-			continue // the app is shutting down: drop the leftovers
-		}
-		a.processWheelTask(t)
-	}
-}
-
-// processWheelTask runs one wheel event: the tmux queries off the event
-// loop, the state change marshaled back onto it.
-func (a *App) processWheelTask(t wheelTask) {
-	// Drop obviously-stale tasks before any tmux call: after leaving or
-	// recreating a session (or resizing), a full queue of obsolete events
-	// must not each wait for the client timeout. wGen is deliberately
-	// omitted — queued fallback gestures survive the fallback-driven scroll
-	// entry bump.
-	// The fullscreen state is event-loop owned: read it under fsMu (enter
-	// and exit hold the same lock) so the worker never races the UI.
-	a.fsMu.Lock()
-	active := a.fullscreen.IsActive()
-	target := a.fullscreen.Target()
-	a.fsMu.Unlock()
-	if a.fullscreenGen.Load() != t.fsGen || a.wheelExitGen.Load() != t.exitGen ||
-		a.sessionGen.Load() != t.sGen || a.userScrollGen.Load() != t.uGen ||
-		!active || target != t.target {
-		return
-	}
-	d, actErr := a.decideFullscreenWheel(t.target, t.fsGen, t.wGen, t.sGen, t.delta, t.x, t.y, t.hasPos)
-	if d == wheelForwarded {
-		return
-	}
-	// Wait for the decision to apply on the event loop before the next task
-	// is decided — otherwise a queued wheel-down could be judged against the
-	// pre-entry state and discarded. An IGNORED positive delta is still
-	// applied when the same fullscreen scroll state became active in the
-	// meantime (a rapid up/down sequence must return toward live). The quit
-	// channel unblocks the wait when the main loop exits and the closure can
-	// never run.
-	done := make(chan struct{})
-	a.g.Update(func(*gocui.Gui) error {
-		if d == wheelFallback {
-			a.applyWheelFallbackIfCurrent(t, d, actErr)
-		} else {
-			a.applyWheelIgnoredIfScrolling(t)
-		}
-		close(done)
-		return nil
-	})
-	select {
-	case <-done:
-	case <-a.quitCh:
-	}
-}
-
-// applyWheelIgnoredIfScrolling applies an ignored positive delta when the
-// initiating fullscreen state is still current and scroll mode is active —
-// the wheel-down that followed a queued wheel-up scrolls the frozen
-// snapshot instead of vanishing.
-func (a *App) applyWheelIgnoredIfScrolling(t wheelTask) {
-	if a.wheelFallbackCurrent(t.fsGen, t.exitGen, t.sGen, t.uGen, t.target) && a.scroll.IsActive() {
-		a.scroll.Move(t.delta)
-		a.g.Update(func(*gocui.Gui) error { return nil })
-	}
-}
-
-// applyWheelFallbackIfCurrent applies a fallback decision on the event loop
-// when the initiating state is still current. Split out so tests can drive
-// it directly (headless mode never runs gui.Update).
-func (a *App) applyWheelFallbackIfCurrent(t wheelTask, d wheelDecision, actErr error) {
-	if a.wheelFallbackCurrent(t.fsGen, t.exitGen, t.sGen, t.uGen, t.target) {
-		a.performWheelAction(d, t.delta, actErr)
-	}
-}
-
-// wheelFallbackCurrent reports whether the state that initiated a wheel
-// decision is still the live one — a slow query must not apply its fallback
-// to a session the user has since left, or after the user has exited scroll
-// mode while the query was in flight. Entering scroll mode does NOT
-// invalidate queued fallbacks: their deltas still accumulate in order.
-func (a *App) wheelFallbackCurrent(fsGen, exitGen, sGen, uGen uint64, target string) bool {
-	return a.fullscreenGen.Load() == fsGen && a.wheelExitGen.Load() == exitGen &&
-		a.sessionGen.Load() == sGen && a.userScrollGen.Load() == uGen &&
-		a.fullscreen.IsActive() && a.fullscreen.Target() == target
-}
-
-// performWheelAction applies a wheel decision on the event loop.
-func (a *App) performWheelAction(d wheelDecision, delta int, actErr error) {
-	if actErr != nil {
-		a.setError(actErr.Error())
-	}
-	if d == wheelFallback {
-		a.enterScrollMode()
-		a.scroll.Move(delta)
 	}
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }

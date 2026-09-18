@@ -77,21 +77,16 @@ type App struct {
 	// tmux scrollback history (alternate-screen programs like Claude Code),
 	// so the status bar can say so and the wheel forwards to the pane.
 	fullscreenNoScrollback     bool
-	fullscreenNoScrollbackPane string        // the pane the verdict belongs to (a pane change hides it)
-	fullscreenIdent            string        // identity of the fullscreen target (a recreation must drop scroll mode)
-	fullscreenGen              atomic.Uint64 // bumped on enter/exit; async callbacks compare against it
-	wheelGen                   atomic.Uint64 // bumped on scroll-mode transitions; stale forwards compare against it
-	wheelExitGen               atomic.Uint64 // bumped on scroll-mode exit; stale fallbacks compare against it
-	userScrollGen              atomic.Uint64 // bumped when the USER enters scroll mode; queued wheel events compare against it
-	modeMu                     sync.Mutex    // guards the cached pane input mode below
+	fullscreenNoScrollbackPane string     // the pane the verdict belongs to (a pane change hides it)
+	fullscreenIdent            string     // identity of the fullscreen target (a recreation must drop scroll mode)
+	modeMu                     sync.Mutex // guards the cached pane input mode below
 	modeTarget                 string
 	modeAlt, modeSgr           bool
 	modeX, modeY               int
 	modePane                   string
-	modeAt                     time.Time      // when the cached mode was refreshed
-	wheelQueue                 chan wheelTask // ordered queue of wheel events (worker-owned)
-	fsMu                       sync.Mutex     // serializes wheel injection with fullscreen transitions
-	lastResizeW                int            // and the size it was resized to
+	modeAt                     time.Time  // when the cached mode was refreshed
+	fsMu                       sync.Mutex // serializes wheel injection with fullscreen transitions
+	lastResizeW                int        // and the size it was resized to
 	lastResizeH                int
 	logs                       []logEntry  // recent status/error messages, shown in the logs panel
 	refreshBusy                atomic.Bool // true while a background session refresh is in flight
@@ -107,8 +102,6 @@ type App struct {
 	sessionGen                 atomic.Uint64
 	captureSeq                 atomic.Uint64 // monotonically increasing capture identity
 	lastSessionSig             string        // name=ID signature of the last applied refresh
-	quitting                   atomic.Bool   // set when the main loop exits; the wheel worker drops leftovers
-	quitCh                     chan struct{} // closed when the main loop exits; unblocks waiting workers
 
 	// scrollHint is the transient preview-title hint shown after a scroll
 	// attempt on a session that keeps its own scrollback (alternate-screen
@@ -172,8 +165,6 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 		paneIDs:           make(map[string]string),
 		paneSeq:           make(map[string]uint64),
 		sessionIdentities: make(map[string]string),
-		wheelQueue:        make(chan wheelTask, 64),
-		quitCh:            make(chan struct{}),
 	}
 
 	g.Highlight = true
@@ -216,10 +207,6 @@ func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
 func (a *App) Run() error {
 	defer a.g.Close()
 
-	// The wheel worker drains the ordered wheel queue (production only —
-	// headless tests drive processWheelTask directly).
-	go a.wheelWorker()
-
 	// Refresh loop: re-read the session list and mark the preview stale so
 	// the next layout cycle captures fresh pane content. Local tmux calls are
 	// fast, but the list fetch runs in a goroutine to keep the event loop
@@ -246,11 +233,6 @@ func (a *App) Run() error {
 
 	err := a.g.MainLoop()
 	close(done)
-	// Stop the wheel worker: the app is recreated after every attach/detach
-	// cycle, and an unclosed queue would leak the worker and its app.
-	a.quitting.Store(true)
-	close(a.wheelQueue)
-	close(a.quitCh)
 	if err != nil {
 		if strings.Contains(err.Error(), "quit") {
 			return nil
@@ -498,7 +480,6 @@ func (a *App) enterFullScreen() {
 	a.previewScrollTarget = ""
 	a.previewScrollTargetID = ""
 	a.fullscreenNoScrollback = false
-	a.fullscreenGen.Add(1)
 	a.scrollHintName = ""
 	a.scrollHintIdent = ""
 	a.scrollHintMsg = ""
@@ -519,7 +500,6 @@ func (a *App) exitFullScreen() {
 	a.fullscreen.Exit()
 	a.fullscreenNoScrollback = false
 	a.fullscreenIdent = ""
-	a.fullscreenGen.Add(1)
 	a.preview.Invalidate()
 }
 
