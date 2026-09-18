@@ -2575,3 +2575,17 @@ func TestFullscreenBarHidesNoScrollbackWhenHistoryAvailable(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, v.Buffer(), "no scrollback", "the badge must not survive history becoming available")
 }
+
+// --- Copilot round-64 fixes ---
+
+func TestWheelForwardFailureFallsBackToScrollMode(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5", wheelErr: assert.AnError}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	app.wheelHandlerAt(-3, 5, 5)
+	assert.True(t, app.scroll.IsActive(), "a failed wheel injection must fall back to lazytmux scroll mode")
+	assert.Equal(t, 3, app.scroll.offsetFromBottom, "the upward wheel still scrolls the snapshot")
+}
