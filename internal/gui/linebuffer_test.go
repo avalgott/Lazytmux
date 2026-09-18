@@ -369,3 +369,17 @@ func TestLineBufferHalfScreenJumpKeepsAllRows(t *testing.T) {
 	want := []string{"L00", "L01", "L02", "L03", "L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"}
 	assert.Equal(t, want, b.Snapshot(), "a half-screen jump must retain the scrolled-off rows")
 }
+
+func TestLineBufferBlankCaptureThenRedraw(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("L01", "L02", "L03"))
+	b.Feed(screen("L02", "L03", "L04"))
+	// All-blank captures keep the screen geometry...
+	b.Feed(screen("", "", ""))
+	b.Feed(screen("", ""))
+	// ...so a later redraw replaces only the screen region, not the whole
+	// history (which would duplicate it).
+	b.Feed(screen("R1", "R2", "R3"))
+	assert.Equal(t, []string{"L01", "R1", "R2", "R3"}, b.Snapshot(),
+		"blank captures must preserve the screen height for the next redraw")
+}

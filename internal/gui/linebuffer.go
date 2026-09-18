@@ -79,16 +79,18 @@ func (b *LineBuffer) update(scr []string) []string {
 	}
 	n := len(scr)
 	prev := b.screenH
+	// An all-blank screen (e.g. a resize that only changes the number of
+	// blank cursor rows) has nothing to replace the screen region with:
+	// keep the accumulated history AND the previous screen geometry, or a
+	// subsequent redraw would treat the whole history as the old screen
+	// region and duplicate it.
+	if n == 0 && len(b.lines) > 0 {
+		return capLines(b.lines, b.cap)
+	}
 	b.screenH = n
 	if len(b.lines) == 0 {
 		b.screen = scr
 		return capLines(scr, b.cap)
-	}
-	// An all-blank screen (e.g. a resize that only changes the number of
-	// blank cursor rows) has nothing to replace the screen region with:
-	// keep the accumulated history instead of erasing it.
-	if n == 0 {
-		return capLines(b.lines, b.cap)
 	}
 	prevScreen := b.screen
 	if len(prevScreen) == 0 {
