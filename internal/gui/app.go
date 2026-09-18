@@ -86,6 +86,7 @@ type App struct {
 	modePane                   string
 	modeAt                     time.Time     // when the cached mode was refreshed
 	modeGen                    atomic.Uint64 // bumped on cache invalidation; stale async refreshes drop their result
+	modeReq                    atomic.Uint64 // latest refresh request; only the newest may publish
 	fsMu                       sync.Mutex    // serializes wheel injection with fullscreen transitions
 	lastResizeW                int           // and the size it was resized to
 	lastResizeH                int
@@ -277,6 +278,7 @@ func (a *App) refreshPaneModeSync() {
 	if err != nil {
 		return
 	}
+	a.modeReq.Add(1)
 	a.modeMu.Lock()
 	a.modeTarget, a.modeAlt, a.modeSgr = target, alt, sgr
 	a.modeX, a.modeY, a.modePane = cx, cy, pane
@@ -296,15 +298,18 @@ func (a *App) refreshPaneMode() {
 		return
 	}
 	g := a.modeGen.Load()
+	r := a.modeReq.Add(1)
 	go func() {
 		alt, sgr, cx, cy, pane, err := a.svc.PaneInputFlags(context.Background(), target)
 		if err != nil {
 			return
 		}
 		a.modeMu.Lock()
-		// Only the latest request may publish: a newer refresh, a
+		// Only the newest request may publish: a later refresh, a
 		// synchronous warm-up, or an exit/recreation invalidates this one.
-		if a.modeGen.Load() == g {
+		// An OLDER overlapping request completing last must not stamp its
+		// stale flags over the newer result.
+		if a.modeGen.Load() == g && a.modeReq.Load() == r {
 			a.modeTarget, a.modeAlt, a.modeSgr = target, alt, sgr
 			a.modeX, a.modeY, a.modePane = cx, cy, pane
 			a.modeAt = time.Now()

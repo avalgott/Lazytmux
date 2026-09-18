@@ -36,13 +36,14 @@ type fakeProvider struct {
 	wheelErr         error               // error for ForwardMouseWheel only
 	cursorX          int
 	cursorY          int
-	wheels           []wheelCall   // recorded ForwardMouseWheel calls
-	wheelBlock       chan struct{} // when set, ForwardMouseWheel blocks until closed
-	wheelStarted     chan struct{} // when set, signaled when ForwardMouseWheel is entered
-	flagsCalls       int           // PaneInputFlags invocation count
-	flagsGate        chan struct{} // when set, PaneInputFlags blocks until closed
-	paneID           string        // pane ID returned by PaneInputFlags
-	scrollbackPaneID string        // pane ID returned by CaptureScrollback
+	wheels           []wheelCall     // recorded ForwardMouseWheel calls
+	wheelBlock       chan struct{}   // when set, ForwardMouseWheel blocks until closed
+	wheelStarted     chan struct{}   // when set, signaled when ForwardMouseWheel is entered
+	flagsCalls       int             // PaneInputFlags invocation count
+	flagsGate        chan struct{}   // when set, PaneInputFlags blocks until closed
+	flagsGates       []chan struct{} // when set, each PaneInputFlags call waits on the next gate
+	paneID           string          // pane ID returned by PaneInputFlags
+	scrollbackPaneID string          // pane ID returned by CaptureScrollback
 	err              error
 }
 
@@ -105,8 +106,17 @@ func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string) (session.P
 }
 
 func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, int, int, string, error) {
-	if f.flagsGate != nil {
+	f.mu.Lock()
+	if len(f.flagsGates) > 0 {
+		gate := f.flagsGates[0]
+		f.flagsGates = f.flagsGates[1:]
+		f.mu.Unlock()
+		<-gate
+	} else if f.flagsGate != nil {
+		f.mu.Unlock()
 		<-f.flagsGate
+	} else {
+		f.mu.Unlock()
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2595,4 +2605,35 @@ func TestStaleAsyncModeRefreshCannotPublish(t *testing.T) {
 		return app.modeTarget == ""
 	}, time.Second, 10*time.Millisecond)
 	assert.Equal(t, "", app.modeTarget, "a stale async refresh must not publish after exit")
+}
+
+// --- Copilot round-52 fix ---
+
+func TestOlderModeRefreshCannotPublishOverNewer(t *testing.T) {
+	gA, gB := make(chan struct{}), make(chan struct{})
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%1", flagsGates: []chan struct{}{gA, gB}}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	app.refreshPaneMode() // request 1, blocked on gA
+	app.refreshPaneMode() // request 2, blocked on gB
+	// The newer request completes first...
+	close(gB)
+	require.Eventually(t, func() bool {
+		app.modeMu.Lock()
+		defer app.modeMu.Unlock()
+		return time.Since(app.modeAt) < time.Minute && app.modeTarget != ""
+	}, time.Second, 10*time.Millisecond)
+	app.modeMu.Lock()
+	committed := app.modeTarget
+	app.modeMu.Unlock()
+	// ...then the older one: it must not overwrite the newer result.
+	close(gA)
+	time.Sleep(50 * time.Millisecond)
+	app.modeMu.Lock()
+	after := app.modeTarget
+	app.modeMu.Unlock()
+	assert.Equal(t, committed, after, "an older overlapping refresh must not stamp over the newer result")
 }
