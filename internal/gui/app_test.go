@@ -2558,11 +2558,14 @@ func TestPaneModeRefreshRestoresPassthrough(t *testing.T) {
 
 	// The periodic refresh restores passthrough.
 	app.exitScrollMode()
+	app.modeMu.Lock()
+	agedAt := app.modeAt
+	app.modeMu.Unlock()
 	app.refreshPaneMode()
 	require.Eventually(t, func() bool {
 		app.modeMu.Lock()
 		defer app.modeMu.Unlock()
-		return time.Since(app.modeAt) < time.Minute
+		return app.modeAt.After(agedAt)
 	}, time.Second, 10*time.Millisecond)
 	app.wheelHandlerAt(-3, 5, 5)
 	require.Len(t, p.wheelSnapshot(), 1, "passthrough must return once the cache is fresh again")
