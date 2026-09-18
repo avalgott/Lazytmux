@@ -40,6 +40,7 @@ type fakeProvider struct {
 	wheelBlock       chan struct{} // when set, ForwardMouseWheel blocks until closed
 	wheelStarted     chan struct{} // when set, signaled when ForwardMouseWheel is entered
 	flagsCalls       int           // PaneInputFlags invocation count
+	flagsGate        chan struct{} // when set, PaneInputFlags blocks until closed
 	paneID           string        // pane ID returned by PaneInputFlags
 	scrollbackPaneID string        // pane ID returned by CaptureScrollback
 	err              error
@@ -104,6 +105,9 @@ func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string) (session.P
 }
 
 func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, int, int, string, error) {
+	if f.flagsGate != nil {
+		<-f.flagsGate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.flagsCalls++
@@ -2569,4 +2573,26 @@ func TestPaneModeRefreshRestoresPassthrough(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	app.wheelHandlerAt(-3, 5, 5)
 	require.Len(t, p.wheelSnapshot(), 1, "passthrough must return once the cache is fresh again")
+}
+
+// --- Copilot round-51 fix ---
+
+func TestStaleAsyncModeRefreshCannotPublish(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5", flagsGate: make(chan struct{})}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	// An async refresh starts and blocks inside the flags query...
+	app.refreshPaneMode()
+	// ...the user exits fullscreen while it is in flight.
+	app.exitFullScreen()
+	close(p.flagsGate)
+	require.Eventually(t, func() bool {
+		app.modeMu.Lock()
+		defer app.modeMu.Unlock()
+		return app.modeTarget == ""
+	}, time.Second, 10*time.Millisecond)
+	assert.Equal(t, "", app.modeTarget, "a stale async refresh must not publish after exit")
 }

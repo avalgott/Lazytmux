@@ -84,9 +84,10 @@ type App struct {
 	modeAlt, modeSgr           bool
 	modeX, modeY               int
 	modePane                   string
-	modeAt                     time.Time  // when the cached mode was refreshed
-	fsMu                       sync.Mutex // serializes wheel injection with fullscreen transitions
-	lastResizeW                int        // and the size it was resized to
+	modeAt                     time.Time     // when the cached mode was refreshed
+	modeGen                    atomic.Uint64 // bumped on cache invalidation; stale async refreshes drop their result
+	fsMu                       sync.Mutex    // serializes wheel injection with fullscreen transitions
+	lastResizeW                int           // and the size it was resized to
 	lastResizeH                int
 	logs                       []logEntry  // recent status/error messages, shown in the logs panel
 	refreshBusy                atomic.Bool // true while a background session refresh is in flight
@@ -263,11 +264,13 @@ func (a *App) Gui() *gocui.Gui {
 // refreshPaneModeSync refreshes the cached pane input mode inline (the
 // fullscreen-entry warm-up; one blocking tmux call is acceptable there).
 func (a *App) refreshPaneModeSync() {
-	if !a.fullscreen.IsActive() {
-		return
-	}
+	// Snapshot the fullscreen state under fsMu (enter/exit hold it) and
+	// commit directly — a synchronous warm-up is always the latest.
+	a.fsMu.Lock()
+	active := a.fullscreen.IsActive()
 	target := a.fullscreen.Target()
-	if target == "" {
+	a.fsMu.Unlock()
+	if !active || target == "" {
 		return
 	}
 	alt, sgr, cx, cy, pane, err := a.svc.PaneInputFlags(context.Background(), target)
@@ -279,25 +282,33 @@ func (a *App) refreshPaneModeSync() {
 	a.modeX, a.modeY, a.modePane = cx, cy, pane
 	a.modeAt = time.Now()
 	a.modeMu.Unlock()
+	a.modeGen.Add(1) // invalidate any in-flight async refresh
 }
 
 func (a *App) refreshPaneMode() {
-	if !a.fullscreen.IsActive() {
-		return
-	}
+	// Snapshot the fullscreen state under fsMu — the ticker goroutine must
+	// not race the event loop's writes.
+	a.fsMu.Lock()
+	active := a.fullscreen.IsActive()
 	target := a.fullscreen.Target()
-	if target == "" {
+	a.fsMu.Unlock()
+	if !active || target == "" {
 		return
 	}
+	g := a.modeGen.Load()
 	go func() {
 		alt, sgr, cx, cy, pane, err := a.svc.PaneInputFlags(context.Background(), target)
 		if err != nil {
 			return
 		}
 		a.modeMu.Lock()
-		a.modeTarget, a.modeAlt, a.modeSgr = target, alt, sgr
-		a.modeX, a.modeY, a.modePane = cx, cy, pane
-		a.modeAt = time.Now()
+		// Only the latest request may publish: a newer refresh, a
+		// synchronous warm-up, or an exit/recreation invalidates this one.
+		if a.modeGen.Load() == g {
+			a.modeTarget, a.modeAlt, a.modeSgr = target, alt, sgr
+			a.modeX, a.modeY, a.modePane = cx, cy, pane
+			a.modeAt = time.Now()
+		}
 		a.modeMu.Unlock()
 	}()
 }
@@ -371,6 +382,11 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 					if ident := sessionIdentity(s); a.fullscreenIdent != "" && ident != a.fullscreenIdent {
 						a.fullscreenIdent = ident
 						a.scroll.Exit()
+						// The cached pane mode belongs to the dead pane.
+						a.modeGen.Add(1)
+						a.modeMu.Lock()
+						a.modeTarget = ""
+						a.modeMu.Unlock()
 					}
 					break
 				}
@@ -498,7 +514,6 @@ func (a *App) enterFullScreen() {
 		return
 	}
 	a.fsMu.Lock()
-	defer a.fsMu.Unlock()
 	a.scroll.Exit()
 	a.previewScroll.Exit()
 	a.previewScrollTarget = ""
@@ -511,7 +526,9 @@ func (a *App) enterFullScreen() {
 	a.preview.Invalidate()
 	a.fullscreenIdent = sessionIdentity(*sess)
 	a.fullscreen.Enter(sess.Name)
-	// Warm the pane-mode cache synchronously: the first wheel event must
+	a.fsMu.Unlock()
+	// Warm the pane-mode cache synchronously (outside fsMu — the helper
+	// takes the lock itself for its snapshot): the first wheel event must
 	// forward without waiting for the ticker, and an asynchronous warm-up
 	// could lose the race with an immediate first wheel.
 	a.refreshPaneModeSync()
@@ -525,6 +542,10 @@ func (a *App) exitFullScreen() {
 	a.fullscreen.Exit()
 	a.fullscreenNoScrollback = false
 	a.fullscreenIdent = ""
+	a.modeGen.Add(1)
+	a.modeMu.Lock()
+	a.modeTarget = ""
+	a.modeMu.Unlock()
 	a.preview.Invalidate()
 }
 
