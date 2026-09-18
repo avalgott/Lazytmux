@@ -230,9 +230,6 @@ func (a *App) Run() error {
 					a.preview.InvalidateTimestamp()
 				}
 				a.preview.Unlock()
-				// Keep the pane-mode cache fresh while fullscreen is live:
-				// the wheel relies on it for the lifetime of the view.
-				a.refreshPaneMode()
 				a.g.Update(func(*gocui.Gui) error { return nil })
 			}
 		}
@@ -264,70 +261,6 @@ func (a *App) Gui() *gocui.Gui {
 // fullscreen target, off the event loop. The wheel uses this cache instead
 // of a per-event blocking lookup, so forwarded input stays in one ordered
 // stream with keyboard input.
-// refreshPaneModeSync refreshes the cached pane input mode inline (the
-// fullscreen-entry warm-up; one blocking tmux call is acceptable there).
-func (a *App) refreshPaneModeSync() {
-	// Snapshot the fullscreen state under fsMu (enter/exit hold it) and
-	// commit directly — a synchronous warm-up is always the latest.
-	a.fsMu.Lock()
-	active := a.fullscreen.IsActive()
-	target := a.fullscreen.Target()
-	a.fsMu.Unlock()
-	if !active || target == "" {
-		return
-	}
-	alt, sgr, cx, cy, pane, err := a.svc.PaneInputFlags(context.Background(), target)
-	if err != nil {
-		return
-	}
-	r := a.modeReq.Add(1)
-	a.modeMu.Lock()
-	a.modeTarget, a.modeAlt, a.modeSgr = target, alt, sgr
-	a.modeX, a.modeY, a.modePane = cx, cy, pane
-	a.modeAt = time.Now()
-	a.modePublished.Store(r)
-	a.modeMu.Unlock()
-	a.modeGen.Add(1) // invalidate any in-flight async refresh
-}
-
-func (a *App) refreshPaneMode() {
-	// Snapshot the fullscreen state under fsMu — the ticker goroutine must
-	// not race the event loop's writes.
-	a.fsMu.Lock()
-	active := a.fullscreen.IsActive()
-	target := a.fullscreen.Target()
-	a.fsMu.Unlock()
-	if !active || target == "" {
-		return
-	}
-	// At most one query in flight: a slow tmux server must not pile up
-	// overlapping processes, and the freshness check must not starve.
-	if !a.modeInflight.CompareAndSwap(false, true) {
-		return
-	}
-	g := a.modeGen.Load()
-	r := a.modeReq.Add(1)
-	go func() {
-		defer a.modeInflight.Store(false)
-		alt, sgr, cx, cy, pane, err := a.svc.PaneInputFlags(context.Background(), target)
-		if err != nil {
-			return
-		}
-		a.modeMu.Lock()
-		// Publish when this result is newer than the last PUBLISHED one —
-		// an older completion may publish while a newer request is merely
-		// pending, so a slow server cannot starve the cache. The newest
-		// completion always wins in the end.
-		if a.modeGen.Load() == g && r > a.modePublished.Load() {
-			a.modeTarget, a.modeAlt, a.modeSgr = target, alt, sgr
-			a.modeX, a.modeY, a.modePane = cx, cy, pane
-			a.modeAt = time.Now()
-			a.modePublished.Store(r)
-		}
-		a.modeMu.Unlock()
-	}()
-}
-
 // refreshSessionsAsync fetches the session list in a background goroutine and
 // updates the cache via gui.Update. Skipped if a refresh is already in flight.
 // The busy flag is atomic: it is read here from the ticker goroutine and
@@ -542,11 +475,6 @@ func (a *App) enterFullScreen() {
 	a.fullscreenIdent = sessionIdentity(*sess)
 	a.fullscreen.Enter(sess.Name)
 	a.fsMu.Unlock()
-	// Warm the pane-mode cache synchronously (outside fsMu — the helper
-	// takes the lock itself for its snapshot): the first wheel event must
-	// forward without waiting for the ticker, and an asynchronous warm-up
-	// could lose the race with an immediate first wheel.
-	a.refreshPaneModeSync()
 }
 
 // exitFullScreen returns to the dashboard layout.

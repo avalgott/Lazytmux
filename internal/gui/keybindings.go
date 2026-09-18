@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/jesseduffield/gocui"
 
@@ -410,27 +409,24 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 			forwarded := false
 			if hasPos {
 				target := a.fullscreen.Target()
-				a.modeMu.Lock()
-				fresh := a.modeTarget == target && time.Since(a.modeAt) < 2*refreshInterval
-				alt, sgr := a.modeAlt, a.modeSgr
-				cx, cy := a.modeX, a.modeY
-				pane := a.modePane
-				a.modeMu.Unlock()
-				if fresh && alt && sgr {
+				// Query the pane's input mode synchronously at dispatch
+				// time: the pane may have stopped tracking mouse input
+				// since the last observation (e.g. vim exited), and raw SGR
+				// bytes must never reach a program that cannot parse them.
+				// One tmux call per wheel — the same cost as any forwarded
+				// key, and inherently ordered with keyboard input.
+				alt, sgr, cx, cy, pane, ferr := a.svc.PaneInputFlags(context.Background(), target)
+				if ferr == nil && alt && sgr {
 					a.buffersMu.Lock()
 					recorded := a.paneIDs[target]
 					a.buffersMu.Unlock()
 					if recorded == "" || recorded == pane {
 						cx, cy = x, y
-						// Send to the VALIDATED pane ID, not the session
-						// name: a tmux-side pane switch between the cache
-						// refresh and the send would otherwise redirect the
-						// injection.
 						sendTarget := target
 						if pane != "" {
 							sendTarget = pane
 						}
-						if ferr := a.svc.ForwardMouseWheel(context.Background(), sendTarget, delta < 0, cx, cy); ferr == nil {
+						if werr := a.svc.ForwardMouseWheel(context.Background(), sendTarget, delta < 0, cx, cy); werr == nil {
 							forwarded = true
 						}
 					}

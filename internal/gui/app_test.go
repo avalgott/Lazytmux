@@ -2512,129 +2512,25 @@ func TestTitleHintHiddenOnPaneChange(t *testing.T) {
 
 // --- Copilot round-47 fix ---
 
-func TestWheelForwardsSynchronouslyViaCachedMode(t *testing.T) {
+func TestWheelForwardsSynchronously(t *testing.T) {
 	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5"}
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
 	app.fullscreen.Enter("devbox")
 	require.NoError(t, app.layout(app.g))
 
-	// The mode cache refreshes off the event loop (the ticker's job); the
-	// wheel then forwards synchronously — no worker queue involved.
-	app.refreshPaneMode()
-	require.Eventually(t, func() bool {
-		app.modeMu.Lock()
-		defer app.modeMu.Unlock()
-		return app.modeTarget == "devbox" && time.Since(app.modeAt) < time.Minute
-	}, time.Second, 10*time.Millisecond)
-
 	app.wheelHandlerAt(-3, 12, 7)
-	require.Len(t, p.wheelSnapshot(), 1, "the wheel must forward immediately and synchronously")
+	require.Len(t, p.wheelSnapshot(), 1, "the wheel must query and forward synchronously")
 	assert.Equal(t, wheelCall{name: "%5", up: true, x: 12, y: 7}, p.wheelSnapshot()[0])
 }
 
 // --- Copilot round-49 fixes ---
 
-func TestEnterFullScreenWarmsModeSynchronously(t *testing.T) {
-	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5"}
-	app := newTestApp(t, p)
-	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
-	app.cursor = 0
-
-	app.enterFullScreen()
-	app.modeMu.Lock()
-	target := app.modeTarget
-	alt, sgr := app.modeAlt, app.modeSgr
-	app.modeMu.Unlock()
-	assert.Equal(t, "devbox", target, "the mode cache warms synchronously on entry")
-	assert.True(t, alt && sgr, "the cached mode reflects the pane's flags")
-}
-
 // --- Copilot round-50 fix ---
-
-func TestPaneModeRefreshRestoresPassthrough(t *testing.T) {
-	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5"}
-	app := newTestApp(t, p)
-	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
-	app.fullscreen.Enter("devbox")
-	require.NoError(t, app.layout(app.g))
-	app.refreshPaneModeSync()
-
-	// Age the cache past the freshness window: the wheel falls back.
-	app.modeMu.Lock()
-	app.modeAt = time.Now().Add(-time.Second)
-	app.modeMu.Unlock()
-	app.wheelHandlerAt(-3, 5, 5)
-	assert.Empty(t, p.wheelSnapshot(), "a stale cache must not inject input")
-	assert.True(t, app.scroll.IsActive(), "the stale cache falls back to scroll mode")
-
-	// The periodic refresh restores passthrough.
-	app.exitScrollMode()
-	app.modeMu.Lock()
-	agedAt := app.modeAt
-	app.modeMu.Unlock()
-	app.refreshPaneMode()
-	require.Eventually(t, func() bool {
-		app.modeMu.Lock()
-		defer app.modeMu.Unlock()
-		return app.modeAt.After(agedAt)
-	}, time.Second, 10*time.Millisecond)
-	app.wheelHandlerAt(-3, 5, 5)
-	require.Len(t, p.wheelSnapshot(), 1, "passthrough must return once the cache is fresh again")
-}
 
 // --- Copilot round-51 fix ---
 
-func TestStaleAsyncModeRefreshCannotPublish(t *testing.T) {
-	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5", flagsGate: make(chan struct{})}
-	app := newTestApp(t, p)
-	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
-	app.fullscreen.Enter("devbox")
-	require.NoError(t, app.layout(app.g))
-
-	// An async refresh starts and blocks inside the flags query...
-	app.refreshPaneMode()
-	// ...the user exits fullscreen while it is in flight.
-	app.exitFullScreen()
-	close(p.flagsGate)
-	require.Eventually(t, func() bool {
-		app.modeMu.Lock()
-		defer app.modeMu.Unlock()
-		return app.modeTarget == ""
-	}, time.Second, 10*time.Millisecond)
-	assert.Equal(t, "", app.modeTarget, "a stale async refresh must not publish after exit")
-}
-
 // --- Copilot round-52 fix ---
-
-func TestModeRefreshInflightGuard(t *testing.T) {
-	gA := make(chan struct{})
-	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%1", flagsGate: gA}
-	app := newTestApp(t, p)
-	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
-	app.fullscreen.Enter("devbox")
-	require.NoError(t, app.layout(app.g))
-
-	// One query in flight; a second refresh must skip rather than pile up.
-	app.refreshPaneMode()
-	require.Eventually(t, func() bool {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		return p.flagsCalls == 1
-	}, time.Second, 10*time.Millisecond)
-	app.refreshPaneMode()
-	p.mu.Lock()
-	calls := p.flagsCalls
-	p.mu.Unlock()
-	assert.Equal(t, 1, calls, "at most one mode query may be in flight")
-
-	close(gA)
-	require.Eventually(t, func() bool {
-		app.modeMu.Lock()
-		defer app.modeMu.Unlock()
-		return app.modeTarget == "devbox" && time.Since(app.modeAt) < time.Minute
-	}, time.Second, 10*time.Millisecond)
-}
 
 // --- Copilot round-56 fixes ---
 
