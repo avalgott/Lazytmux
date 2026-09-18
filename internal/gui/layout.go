@@ -279,7 +279,9 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 			a.buffersMu.Lock()
 			currentPane := a.paneIDs[a.fullscreen.Target()]
 			a.buffersMu.Unlock()
-			if currentPane == a.fullscreenNoScrollbackPane {
+			// The verdict goes stale the moment the synthetic buffer gains
+			// history — the badge must not keep claiming otherwise.
+			if currentPane == a.fullscreenNoScrollbackPane && !a.bufferHasHistory(a.fullscreen.Target()) {
 				fmt.Fprint(v2, "  "+presentation.Dim+"no scrollback"+presentation.Reset)
 			}
 		}

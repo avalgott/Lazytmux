@@ -2658,3 +2658,24 @@ func TestTitleHintHiddenWhenBufferGainedHistory(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, v.Title, "Hit Enter", "the stale verdict must not reappear once history is available")
 }
+
+// --- Copilot round-57 fix ---
+
+func TestFullscreenBarHidesNoScrollbackWhenHistoryAvailable(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g)) // settle geometry
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), app.captureSeq.Add(1), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.fullscreenNoScrollback = true
+	app.fullscreenNoScrollbackPane = "%1"
+
+	// The program starts streaming: the synthetic buffer gains history.
+	app.feedBuffer("devbox", "h1\nh2\nh3\nh4\nh5\nh6\nh7")
+	app.feedBuffer("devbox", "h2\nh3\nh4\nh5\nh6\nh7\nh8")
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("fullscreen-bar")
+	require.NoError(t, err)
+	assert.NotContains(t, v.Buffer(), "no scrollback", "the badge must not survive history becoming available")
+}
