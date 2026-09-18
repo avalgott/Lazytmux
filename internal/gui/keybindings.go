@@ -400,55 +400,64 @@ func (a *App) wheelHandlerAt(delta, x, y int) {
 
 func (a *App) wheel(delta, x, y int, hasPos bool) {
 	if a.fullscreen.IsActive() {
-		if a.scroll.IsActive() {
+		// The scroll-state check, the pane validation, and the forward are
+		// one fsMu section — recordPaneLocked rebinds the pane under the
+		// same lock, so a rebind can never race the injection. The lock is
+		// released before the scroll fallback (enterScrollMode takes it).
+		a.fsMu.Lock()
+		scrollActive := a.scroll.IsActive()
+		if !scrollActive {
+			forwarded := false
+			if hasPos {
+				target := a.fullscreen.Target()
+				a.modeMu.Lock()
+				fresh := a.modeTarget == target && time.Since(a.modeAt) < 2*refreshInterval
+				alt, sgr := a.modeAlt, a.modeSgr
+				cx, cy := a.modeX, a.modeY
+				pane := a.modePane
+				a.modeMu.Unlock()
+				if fresh && alt && sgr {
+					a.buffersMu.Lock()
+					recorded := a.paneIDs[target]
+					a.buffersMu.Unlock()
+					if recorded == "" || recorded == pane {
+						cx, cy = x, y
+						// Send to the VALIDATED pane ID, not the session
+						// name: a tmux-side pane switch between the cache
+						// refresh and the send would otherwise redirect the
+						// injection.
+						sendTarget := target
+						if pane != "" {
+							sendTarget = pane
+						}
+						if ferr := a.svc.ForwardMouseWheel(context.Background(), sendTarget, delta < 0, cx, cy); ferr == nil {
+							forwarded = true
+						}
+					}
+				}
+			}
+			a.fsMu.Unlock()
+			if forwarded {
+				return
+			}
+			// Positionless events come from the global binding (the mouse
+			// is over the status bar, not the pane). The view-scoped "main"
+			// binding covers every wheel event actually over the pane —
+			// ignore these rather than forwarding at the pane cursor.
+			if !hasPos {
+				return
+			}
+			// Wheel-down at the live bottom has nothing to browse; entering
+			// would start a whole-history load that pins at the bottom.
+			if delta > 0 {
+				return
+			}
+			a.enterScrollMode()
 			a.scroll.Move(delta)
 			a.g.Update(func(*gocui.Gui) error { return nil })
 			return
 		}
-		// Positionless events come from the global binding (the mouse is
-		// over the status bar, not the pane). The view-scoped "main"
-		// binding covers every wheel event actually over the pane — ignore
-		// these rather than forwarding at the pane cursor.
-		if !hasPos {
-			return
-		}
-		// The wheel decision and the forward run synchronously on the event
-		// loop using the cached pane mode — keyboard input forwarded
-		// afterwards cannot overtake the wheel, and the per-wheel blocking
-		// lookup is gone.
-		target := a.fullscreen.Target()
-		a.modeMu.Lock()
-		fresh := a.modeTarget == target && time.Since(a.modeAt) < 2*refreshInterval
-		alt, sgr := a.modeAlt, a.modeSgr
-		cx, cy := a.modeX, a.modeY
-		pane := a.modePane
-		a.modeMu.Unlock()
-		if fresh && alt && sgr {
-			a.buffersMu.Lock()
-			recorded := a.paneIDs[target]
-			a.buffersMu.Unlock()
-			if recorded == "" || recorded == pane {
-				if hasPos {
-					cx, cy = x, y
-				}
-				// Send to the VALIDATED pane ID, not the session name: a
-				// tmux-side pane switch between the cache refresh and the
-				// send would otherwise redirect the injection.
-				sendTarget := target
-				if pane != "" {
-					sendTarget = pane
-				}
-				if ferr := a.svc.ForwardMouseWheel(context.Background(), sendTarget, delta < 0, cx, cy); ferr == nil {
-					return
-				}
-			}
-		}
-		// Wheel-down at the live bottom has nothing to browse; entering
-		// would start a whole-history load that pins at the bottom.
-		if delta > 0 {
-			return
-		}
-		a.enterScrollMode()
+		a.fsMu.Unlock()
 		a.scroll.Move(delta)
 		a.g.Update(func(*gocui.Gui) error { return nil })
 		return
