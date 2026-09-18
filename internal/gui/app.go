@@ -86,7 +86,9 @@ type App struct {
 	modePane                   string
 	modeAt                     time.Time     // when the cached mode was refreshed
 	modeGen                    atomic.Uint64 // bumped on cache invalidation; stale async refreshes drop their result
-	modeReq                    atomic.Uint64 // latest refresh request; only the newest may publish
+	modeReq                    atomic.Uint64 // latest refresh request
+	modePublished              atomic.Uint64 // highest request whose result was committed
+	modeInflight               atomic.Bool   // a mode query is in flight (at most one)
 	fsMu                       sync.Mutex    // serializes wheel injection with fullscreen transitions
 	lastResizeW                int           // and the size it was resized to
 	lastResizeH                int
@@ -278,11 +280,12 @@ func (a *App) refreshPaneModeSync() {
 	if err != nil {
 		return
 	}
-	a.modeReq.Add(1)
+	r := a.modeReq.Add(1)
 	a.modeMu.Lock()
 	a.modeTarget, a.modeAlt, a.modeSgr = target, alt, sgr
 	a.modeX, a.modeY, a.modePane = cx, cy, pane
 	a.modeAt = time.Now()
+	a.modePublished.Store(r)
 	a.modeMu.Unlock()
 	a.modeGen.Add(1) // invalidate any in-flight async refresh
 }
@@ -297,22 +300,29 @@ func (a *App) refreshPaneMode() {
 	if !active || target == "" {
 		return
 	}
+	// At most one query in flight: a slow tmux server must not pile up
+	// overlapping processes, and the freshness check must not starve.
+	if !a.modeInflight.CompareAndSwap(false, true) {
+		return
+	}
 	g := a.modeGen.Load()
 	r := a.modeReq.Add(1)
 	go func() {
+		defer a.modeInflight.Store(false)
 		alt, sgr, cx, cy, pane, err := a.svc.PaneInputFlags(context.Background(), target)
 		if err != nil {
 			return
 		}
 		a.modeMu.Lock()
-		// Only the newest request may publish: a later refresh, a
-		// synchronous warm-up, or an exit/recreation invalidates this one.
-		// An OLDER overlapping request completing last must not stamp its
-		// stale flags over the newer result.
-		if a.modeGen.Load() == g && a.modeReq.Load() == r {
+		// Publish when this result is newer than the last PUBLISHED one —
+		// an older completion may publish while a newer request is merely
+		// pending, so a slow server cannot starve the cache. The newest
+		// completion always wins in the end.
+		if a.modeGen.Load() == g && r > a.modePublished.Load() {
 			a.modeTarget, a.modeAlt, a.modeSgr = target, alt, sgr
 			a.modeX, a.modeY, a.modePane = cx, cy, pane
 			a.modeAt = time.Now()
+			a.modePublished.Store(r)
 		}
 		a.modeMu.Unlock()
 	}()

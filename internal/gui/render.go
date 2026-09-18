@@ -146,7 +146,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 		// retry). Without the clear, a session recreated under the same name
 		// and cursor index would inherit the old pane's screen.
 		a.preview.ClearContent()
-		a.preview.MarkFetched(name, gen, cursorSnapshot)
+		a.preview.MarkFetched(name, gen, "", cursorSnapshot)
 		a.preview.Unlock()
 		a.g.Update(func(*gocui.Gui) error { return nil })
 		return
@@ -158,8 +158,14 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 		a.preview.Update(name, result.Content, gen, result.PaneID, cursorSnapshot, result.CursorX, result.CursorY)
 	} else {
 		// Failed capture (e.g. session died between refresh cycles) —
-		// mark fetched so we don't retry on every render.
-		a.preview.MarkFetched(name, gen, cursorSnapshot)
+		// mark fetched so we don't retry on every render. The pane is
+		// retagged to the CURRENT recorded binding: after a pane rebind,
+		// keeping the old pane ID would trip the render-time mismatch on
+		// every failure and spin captures on a persistent tmux error.
+		a.buffersMu.Lock()
+		curPane := a.paneIDs[name]
+		a.buffersMu.Unlock()
+		a.preview.MarkFetched(name, gen, curPane, cursorSnapshot)
 	}
 	a.preview.Unlock()
 	if err == nil {

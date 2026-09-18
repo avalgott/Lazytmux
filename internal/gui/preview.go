@@ -103,15 +103,16 @@ func (pc *PreviewCache) InvalidateTimestamp() {
 // captured for a different session is dropped — retagging it would display
 // one session's screen under another's name.
 // Caller must hold lock.
-func (pc *PreviewCache) MarkFetched(name string, gen uint64, cursorIdx int) {
-	// A different name OR generation is a different session incarnation:
+func (pc *PreviewCache) MarkFetched(name string, gen uint64, paneID string, cursorIdx int) {
+	// A different name, generation, or pane is a different incarnation:
 	// retagging its cached screen would display one pane's content under
 	// another's. Same-incarnation refresh failures keep the cache.
-	if pc.name != name || pc.gen != gen {
+	if pc.name != name || pc.gen != gen || pc.paneID != paneID {
 		pc.content = ""
 	}
 	pc.name = name
 	pc.gen = gen
+	pc.paneID = paneID
 	pc.cursor = cursorIdx
 	pc.busy = false
 	pc.fetchAt = time.Now()

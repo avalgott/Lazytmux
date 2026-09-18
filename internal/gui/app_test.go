@@ -1672,7 +1672,7 @@ func TestMarkFetchedClearsForeignContent(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.preview.Lock()
 	app.preview.Update("session-A", "A-CONTENT", 0, "", 0, 0, 0)
-	app.preview.MarkFetched("session-B", 0, 0)
+	app.preview.MarkFetched("session-B", 0, "", 0)
 	assert.Equal(t, "", app.preview.Content(), "a failed fetch for another session must not retag the old content")
 	app.preview.Unlock()
 }
@@ -1681,7 +1681,7 @@ func TestMarkFetchedKeepsOwnContent(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.preview.Lock()
 	app.preview.Update("session-A", "A-CONTENT", 0, "", 0, 0, 0)
-	app.preview.MarkFetched("session-A", 0, 0)
+	app.preview.MarkFetched("session-A", 0, "", 0)
 	assert.Equal(t, "A-CONTENT", app.preview.Content(), "a failed fetch for the same session keeps the cached content")
 	app.preview.Unlock()
 }
@@ -1804,7 +1804,7 @@ func TestUnboundBufferBoundWhenIdentityUnchanged(t *testing.T) {
 func TestMarkFetchedRecordsGeneration(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.preview.Lock()
-	app.preview.MarkFetched("devbox", 7, 0)
+	app.preview.MarkFetched("devbox", 7, "", 0)
 	assert.Equal(t, uint64(7), app.preview.Gen(), "the capture generation rides through a failed fetch so the throttle holds")
 	app.preview.Unlock()
 }
@@ -2075,7 +2075,7 @@ func TestMarkFetchedClearsForeignGeneration(t *testing.T) {
 	app.preview.Update("devbox", "OLD-SCREEN", 1, "", 0, 0, 0)
 	// A failed capture for the recreated incarnation must not retag the
 	// previous pane's content.
-	app.preview.MarkFetched("devbox", 2, 0)
+	app.preview.MarkFetched("devbox", 2, "", 0)
 	assert.Equal(t, "", app.preview.Content(), "a generation change is a different session incarnation")
 	app.preview.Unlock()
 }
@@ -2609,31 +2609,26 @@ func TestStaleAsyncModeRefreshCannotPublish(t *testing.T) {
 
 // --- Copilot round-52 fix ---
 
-func TestOlderModeRefreshCannotPublishOverNewer(t *testing.T) {
-	gA, gB := make(chan struct{}), make(chan struct{})
-	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%1", flagsGates: []chan struct{}{gA, gB}}
+func TestModeRefreshInflightGuard(t *testing.T) {
+	gA := make(chan struct{})
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%1", flagsGate: gA}
 	app := newTestApp(t, p)
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
 	app.fullscreen.Enter("devbox")
 	require.NoError(t, app.layout(app.g))
 
-	app.refreshPaneMode() // request 1, blocked on gA
-	app.refreshPaneMode() // request 2, blocked on gB
-	// The newer request completes first...
-	close(gB)
+	// One query in flight; a second refresh must skip rather than pile up.
+	app.refreshPaneMode()
+	app.refreshPaneMode()
+	p.mu.Lock()
+	calls := p.flagsCalls
+	p.mu.Unlock()
+	assert.Equal(t, 1, calls, "at most one mode query may be in flight")
+
+	close(gA)
 	require.Eventually(t, func() bool {
 		app.modeMu.Lock()
 		defer app.modeMu.Unlock()
-		return time.Since(app.modeAt) < time.Minute && app.modeTarget != ""
+		return app.modeTarget == "devbox" && time.Since(app.modeAt) < time.Minute
 	}, time.Second, 10*time.Millisecond)
-	app.modeMu.Lock()
-	committed := app.modeTarget
-	app.modeMu.Unlock()
-	// ...then the older one: it must not overwrite the newer result.
-	close(gA)
-	time.Sleep(50 * time.Millisecond)
-	app.modeMu.Lock()
-	after := app.modeTarget
-	app.modeMu.Unlock()
-	assert.Equal(t, committed, after, "an older overlapping refresh must not stamp over the newer result")
 }
