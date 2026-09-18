@@ -2783,7 +2783,7 @@ func TestPaneIDsPrunedOnIdentityChange(t *testing.T) {
 func TestAdoptPaneDoesNotOverwriteNewerBinding(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "P", Full: "P", PaneID: "%2"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), app.captureSeq.Add(1), session.Preview{Content: "P", Full: "P", PaneID: "%2"}, nil)
 
 	// A live capture recorded a NEWER pane after the scroll fetch.
 	app.adoptPaneIfStale("devbox", "%2", "%9")
@@ -2792,12 +2792,12 @@ func TestAdoptPaneDoesNotOverwriteNewerBinding(t *testing.T) {
 	app.buffersMu.Unlock()
 	assert.Equal(t, "%9", recorded, "the fetch-time binding adopts the snapshot's pane")
 
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 0, session.Preview{Content: "Q", Full: "Q", PaneID: "%3"}, nil)
-	app.adoptPaneIfStale("devbox", "%2", "%9")
+	// A capture that started AFTER the adoption rebinds to its pane.
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), app.captureSeq.Add(1), session.Preview{Content: "Q", Full: "Q", PaneID: "%3"}, nil)
 	app.buffersMu.Lock()
 	recorded = app.paneIDs["devbox"]
 	app.buffersMu.Unlock()
-	assert.Equal(t, "%3", recorded, "a newer capture wins over the stale snapshot")
+	assert.Equal(t, "%3", recorded, "a capture newer than the adoption wins")
 }
 
 // --- Copilot round-40 fixes ---
