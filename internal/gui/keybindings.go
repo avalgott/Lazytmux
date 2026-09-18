@@ -440,6 +440,9 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 			recorded := a.paneIDs[target]
 			a.buffersMu.Unlock()
 			if recorded == "" || recorded == pane {
+				if hasPos {
+					cx, cy = x, y
+				}
 				if ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy); ferr == nil {
 					return
 				}
