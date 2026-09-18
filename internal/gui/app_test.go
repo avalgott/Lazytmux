@@ -107,6 +107,7 @@ func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string) (session.P
 
 func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, int, int, string, error) {
 	f.mu.Lock()
+	f.flagsCalls++
 	if len(f.flagsGates) > 0 {
 		gate := f.flagsGates[0]
 		f.flagsGates = f.flagsGates[1:]
@@ -118,9 +119,6 @@ func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, 
 	} else {
 		f.mu.Unlock()
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.flagsCalls++
 	return f.altOn, f.sgrMouse, f.cursorX, f.cursorY, f.paneID, f.err
 }
 
