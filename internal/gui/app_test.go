@@ -2619,6 +2619,11 @@ func TestModeRefreshInflightGuard(t *testing.T) {
 
 	// One query in flight; a second refresh must skip rather than pile up.
 	app.refreshPaneMode()
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.flagsCalls == 1
+	}, time.Second, 10*time.Millisecond)
 	app.refreshPaneMode()
 	p.mu.Lock()
 	calls := p.flagsCalls
