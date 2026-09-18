@@ -48,7 +48,13 @@ func (a *App) renderPreview(v *gocui.View) {
 	// A recent scroll attempt on a session without scrollback explains
 	// itself in the title for a few seconds (the log keeps a record too).
 	// Dashboard only — the fullscreen frame title carries the session name.
-	if !a.fullscreen.IsActive() && a.scrollHintName == sess.Name && a.scrollHintIdent == sessionIdentity(*sess) && time.Now().Before(a.scrollHintUntil) {
+	// The verdict belongs to a specific pane: a replacement pane must not
+	// inherit the old pane's title.
+	a.buffersMu.Lock()
+	hintPane := a.paneIDs[sess.Name]
+	a.buffersMu.Unlock()
+	if !a.fullscreen.IsActive() && a.scrollHintName == sess.Name && a.scrollHintIdent == sessionIdentity(*sess) &&
+		a.scrollHintPane == hintPane && time.Now().Before(a.scrollHintUntil) {
 		v.Title = " " + a.scrollHintMsg + " "
 	}
 

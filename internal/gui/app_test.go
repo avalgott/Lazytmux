@@ -2975,3 +2975,27 @@ func TestSettlePaneLockedStaleSnapshotRejected(t *testing.T) {
 	app.fsMu.Unlock()
 	assert.False(t, ok, "a snapshot whose fetch-time binding is gone must be rejected")
 }
+
+// --- Copilot round-46 fix ---
+
+func TestTitleHintHiddenOnPaneChange(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), app.captureSeq.Add(1), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.scrollHintName = "devbox"
+	app.scrollHintIdent = sessionIdentity(app.sessions[0])
+	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
+	app.scrollHintPane = "%1"
+	app.scrollHintUntil = time.Now().Add(time.Minute)
+
+	// The active pane changes during the hint window.
+	app.buffersMu.Lock()
+	app.paneIDs["devbox"] = "%2"
+	app.buffersMu.Unlock()
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.NotContains(t, v.Title, "Hit Enter", "the replacement pane must not inherit the old pane's verdict")
+}
