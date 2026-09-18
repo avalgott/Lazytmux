@@ -276,9 +276,11 @@ func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID, fetchRecorded stri
 	}
 	if noHistory {
 		a.fullscreenNoScrollback = true
-		a.buffersMu.Lock()
-		a.fullscreenNoScrollbackPane = a.paneIDs[a.fullscreen.Target()]
-		a.buffersMu.Unlock()
+		// The verdict belongs to the pane THIS snapshot came from — reading
+		// paneIDs after the fsMu section could race a rebind and associate
+		// the badge with the replacement pane. The render-time comparison
+		// hides it when the active pane changes.
+		a.fullscreenNoScrollbackPane = paneID
 		a.exitScrollMode()
 		return
 	}
