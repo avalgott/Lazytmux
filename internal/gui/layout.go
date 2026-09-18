@@ -285,7 +285,12 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 		// The pane's program keeps its own scrollback (alternate screen):
 		// the wheel goes to the program, lazytmux has nothing to browse.
 		if a.fullscreenNoScrollback {
-			fmt.Fprint(v2, "  "+presentation.Dim+"no scrollback"+presentation.Reset)
+			a.buffersMu.Lock()
+			currentPane := a.paneIDs[a.fullscreen.Target()]
+			a.buffersMu.Unlock()
+			if currentPane == a.fullscreenNoScrollbackPane {
+				fmt.Fprint(v2, "  "+presentation.Dim+"no scrollback"+presentation.Reset)
+			}
 		}
 	}
 

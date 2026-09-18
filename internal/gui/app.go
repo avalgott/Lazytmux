@@ -76,38 +76,40 @@ type App struct {
 	// fullscreenNoScrollback marks the fullscreen target's pane as having no
 	// tmux scrollback history (alternate-screen programs like Claude Code),
 	// so the status bar can say so and the wheel forwards to the pane.
-	fullscreenNoScrollback bool
-	fullscreenIdent        string         // identity of the fullscreen target (a recreation must drop scroll mode)
-	fullscreenGen          atomic.Uint64  // bumped on enter/exit; async callbacks compare against it
-	wheelGen               atomic.Uint64  // bumped on scroll-mode transitions; stale forwards compare against it
-	wheelExitGen           atomic.Uint64  // bumped on scroll-mode exit; stale fallbacks compare against it
-	userScrollGen          atomic.Uint64  // bumped when the USER enters scroll mode; queued wheel events compare against it
-	wheelQueue             chan wheelTask // ordered queue of wheel events (worker-owned)
-	fsMu                   sync.Mutex     // serializes wheel injection with fullscreen transitions
-	lastResizeW            int            // and the size it was resized to
-	lastResizeH            int
-	logs                   []logEntry  // recent status/error messages, shown in the logs panel
-	refreshBusy            atomic.Bool // true while a background session refresh is in flight
-	attachTarget           string      // session to attach to; set on Enter, main() acts on it
-	buffers                map[string]*LineBuffer
-	bufferIDs              map[string]string // buffer name -> "ID@Created@PID" identity it belongs to
-	bufferIdentities       map[string]string // buffer name -> the session identity it was fed under
-	paneIDs                map[string]string // session name -> the active pane the buffer/preview belong to
-	paneSeq                map[string]uint64 // session -> the capture sequence that last recorded its pane
-	sessionIdentities      map[string]string // session name -> identity, updated every refresh
-	bufferGens             map[string]uint64 // generation the buffer was last fed under
-	buffersMu              sync.Mutex        // guards the buffers map (LineBuffer locks itself)
-	sessionGen             atomic.Uint64
-	captureSeq             atomic.Uint64 // monotonically increasing capture identity
-	lastSessionSig         string        // name=ID signature of the last applied refresh
-	quitting               atomic.Bool   // set when the main loop exits; the wheel worker drops leftovers
-	quitCh                 chan struct{} // closed when the main loop exits; unblocks waiting workers
+	fullscreenNoScrollback     bool
+	fullscreenNoScrollbackPane string         // the pane the verdict belongs to (a pane change hides it)
+	fullscreenIdent            string         // identity of the fullscreen target (a recreation must drop scroll mode)
+	fullscreenGen              atomic.Uint64  // bumped on enter/exit; async callbacks compare against it
+	wheelGen                   atomic.Uint64  // bumped on scroll-mode transitions; stale forwards compare against it
+	wheelExitGen               atomic.Uint64  // bumped on scroll-mode exit; stale fallbacks compare against it
+	userScrollGen              atomic.Uint64  // bumped when the USER enters scroll mode; queued wheel events compare against it
+	wheelQueue                 chan wheelTask // ordered queue of wheel events (worker-owned)
+	fsMu                       sync.Mutex     // serializes wheel injection with fullscreen transitions
+	lastResizeW                int            // and the size it was resized to
+	lastResizeH                int
+	logs                       []logEntry  // recent status/error messages, shown in the logs panel
+	refreshBusy                atomic.Bool // true while a background session refresh is in flight
+	attachTarget               string      // session to attach to; set on Enter, main() acts on it
+	buffers                    map[string]*LineBuffer
+	bufferIDs                  map[string]string // buffer name -> "ID@Created@PID" identity it belongs to
+	bufferIdentities           map[string]string // buffer name -> the session identity it was fed under
+	paneIDs                    map[string]string // session name -> the active pane the buffer/preview belong to
+	paneSeq                    map[string]uint64 // session -> the capture sequence that last recorded its pane
+	sessionIdentities          map[string]string // session name -> identity, updated every refresh
+	bufferGens                 map[string]uint64 // generation the buffer was last fed under
+	buffersMu                  sync.Mutex        // guards the buffers map (LineBuffer locks itself)
+	sessionGen                 atomic.Uint64
+	captureSeq                 atomic.Uint64 // monotonically increasing capture identity
+	lastSessionSig             string        // name=ID signature of the last applied refresh
+	quitting                   atomic.Bool   // set when the main loop exits; the wheel worker drops leftovers
+	quitCh                     chan struct{} // closed when the main loop exits; unblocks waiting workers
 
 	// scrollHint is the transient preview-title hint shown after a scroll
 	// attempt on a session that keeps its own scrollback (alternate-screen
 	// programs like Claude Code): "press Enter to open it and scroll inside".
 	scrollHintName  string
 	scrollHintIdent string // session identity (ID@Created) the hint belongs to
+	scrollHintPane  string // the pane the hint belongs to (a pane change invalidates it)
 	scrollHintMsg   string // the message shown (depends on whether scrolling inside is possible)
 	scrollHintUntil time.Time
 }

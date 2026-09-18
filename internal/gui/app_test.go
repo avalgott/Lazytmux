@@ -2877,3 +2877,44 @@ func TestPreviewLoadDiscardedWhenNewerPaneBinding(t *testing.T) {
 		return len(p.scrollRanges) > n0
 	}, time.Second, 10*time.Millisecond, "the load must restart under the newer binding")
 }
+
+// --- Copilot round-43 fixes ---
+
+func TestHintInvalidatedByPaneChange(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 1, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(20, 78)
+	app.applyNoHistoryHint("devbox", false, false, false)
+	assert.Equal(t, "%1", app.scrollHintPane)
+
+	// The pane changes: the hint belongs to the old pane and must not
+	// suppress the new pane's scrolling.
+	app.buffersMu.Lock()
+	app.paneIDs["devbox"] = "%2"
+	app.paneSeq["devbox"] = 2
+	app.buffersMu.Unlock()
+	require.NoError(t, app.layout(app.g))
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(20, 78)
+	seq := app.previewScroll.seq
+	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), "%2", "%2", make([]string, 25), 5, nil)
+	assert.True(t, app.previewScroll.loaded, "a pane change must invalidate the old pane's hint")
+}
+
+func TestAdoptPaneReservesCaptureSequence(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 1, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+
+	app.adoptPaneIfStale("devbox", "%1", "%2")
+	// A live capture started before the adoption completes afterwards: its
+	// pane must not rebind the session back.
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 1, session.Preview{Content: "Q", Full: "Q", PaneID: "%1"}, nil)
+	app.buffersMu.Lock()
+	recorded := app.paneIDs["devbox"]
+	app.buffersMu.Unlock()
+	assert.Equal(t, "%2", recorded, "an in-flight capture predating the adoption must not rebind the session")
+}

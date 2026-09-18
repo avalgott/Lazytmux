@@ -270,6 +270,9 @@ func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID, fetchRecorded stri
 	}
 	if noHistory {
 		a.fullscreenNoScrollback = true
+		a.buffersMu.Lock()
+		a.fullscreenNoScrollbackPane = a.paneIDs[a.fullscreen.Target()]
+		a.buffersMu.Unlock()
 		a.exitScrollMode()
 		return
 	}
@@ -325,14 +328,16 @@ func (a *App) exitScrollMode() {
 // from observed captures (alternate-screen panes keep no tmux history).
 // Lines are truncated to the given width. Safe to run from a goroutine.
 func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, string, string, error) {
-	preview, err := a.svc.CaptureScrollback(context.Background(), target)
-	if err != nil {
-		return nil, 0, "", "", err
-	}
-	lines := splitScrollback(preview.Content, width)
+	// Sample the binding BEFORE the tmux snapshot: a concurrent rebinding
+	// must make this snapshot fail the compare-and-adopt at apply time.
 	a.buffersMu.Lock()
 	recorded := a.paneIDs[target]
 	a.buffersMu.Unlock()
+	preview, err := a.svc.CaptureScrollback(context.Background(), target)
+	if err != nil {
+		return nil, 0, "", recorded, err
+	}
+	lines := splitScrollback(preview.Content, width)
 	if len(lines) > preview.PaneHeight {
 		return lines, preview.PaneHeight, preview.PaneID, recorded, nil // real tmux history
 	}
@@ -464,8 +469,12 @@ func (a *App) enterPreviewScroll() {
 	// expensive whole-history load while the hint is showing — but only
 	// while the buffer is still empty. Live captures keep feeding it, and
 	// the program may have started streaming within the hint window.
+	a.buffersMu.Lock()
+	hintPane := a.paneIDs[sess.Name]
+	a.buffersMu.Unlock()
 	skip := a.scrollHintIdent != "" && a.scrollHintName == sess.Name &&
-		a.scrollHintIdent == sessionIdentity(*sess) && time.Now().Before(a.scrollHintUntil)
+		a.scrollHintIdent == sessionIdentity(*sess) && a.scrollHintPane == hintPane &&
+		time.Now().Before(a.scrollHintUntil)
 	if skip {
 		if b := a.bufferLookup(sess.Name); b != nil {
 			if snap, h := b.SnapshotWithHeight(); len(snap) > h {
@@ -521,6 +530,11 @@ func (a *App) restartPreviewScrollLoad() {
 // panes like Claude Code) returns to the live capture with a status note
 // instead: there is nothing to browse.
 func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID, fetchRecorded string, lines []string, paneH int, loadErr error) {
+	// A superseded load must not touch pane metadata at all — the mode was
+	// exited and possibly re-entered for another target.
+	if a.previewScroll.seq != seq {
+		return
+	}
 	if a.sessionGen.Load() != sGen {
 		// Same dead end as the fullscreen applier: restart the load under
 		// the current generation instead of stranding the loading panel.
@@ -556,15 +570,29 @@ func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID, fetchRecord
 		// switched sessions while the query was in flight).
 		seq := a.previewScroll.seq
 		go func() {
-			alt, sgr, _, _, _, ferr := a.svc.PaneInputFlags(context.Background(), name)
+			alt, sgr, _, _, qPane, ferr := a.svc.PaneInputFlags(context.Background(), name)
 			a.g.Update(func(*gocui.Gui) error {
-				if a.noHistoryHintCurrent(name, seq) {
-					a.applyNoHistoryHint(name, alt, sgr, ferr != nil)
-				}
+				a.applyNoHistory(name, seq, alt, sgr, qPane, paneID, ferr != nil)
 				return nil
 			})
 		}()
 	}
+}
+
+// applyNoHistory applies the no-history verdict for a scroll load — unless
+// the load is stale, or the pane switched while the flags query was in
+// flight (the verdict belongs to the snapshot's pane, not the replacement).
+func (a *App) applyNoHistory(name string, seq int64, alt, sgr bool, qPane, paneID string, flagErr bool) {
+	if !a.noHistoryHintCurrent(name, seq) {
+		return
+	}
+	if qPane != "" && paneID != "" && qPane != paneID {
+		// The active pane changed while the query ran: the verdict must not
+		// suppress the replacement pane's browsing.
+		a.restartPreviewScrollLoad()
+		return
+	}
+	a.applyNoHistoryHint(name, alt, sgr, flagErr)
 }
 
 // noHistoryHintCurrent reports whether the scroll load that launched the
@@ -588,6 +616,9 @@ func (a *App) applyNoHistoryHint(name string, alt, sgr, flagErr bool) {
 	if !flagErr && alt && sgr {
 		a.scrollHintMsg = scrollHintText
 	}
+	a.buffersMu.Lock()
+	a.scrollHintPane = a.paneIDs[name]
+	a.buffersMu.Unlock()
 	a.scrollHintUntil = time.Now().Add(scrollHintDuration)
 	a.setStatus(a.scrollHintMsg)
 	a.exitPreviewScroll()
