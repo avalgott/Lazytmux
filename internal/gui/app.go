@@ -79,18 +79,8 @@ type App struct {
 	fullscreenNoScrollback     bool
 	fullscreenNoScrollbackPane string     // the pane the verdict belongs to (a pane change hides it)
 	fullscreenIdent            string     // identity of the fullscreen target (a recreation must drop scroll mode)
-	modeMu                     sync.Mutex // guards the cached pane input mode below
-	modeTarget                 string
-	modeAlt, modeSgr           bool
-	modeX, modeY               int
-	modePane                   string
-	modeAt                     time.Time     // when the cached mode was refreshed
-	modeGen                    atomic.Uint64 // bumped on cache invalidation; stale async refreshes drop their result
-	modeReq                    atomic.Uint64 // latest refresh request
-	modePublished              atomic.Uint64 // highest request whose result was committed
-	modeInflight               atomic.Bool   // a mode query is in flight (at most one)
-	fsMu                       sync.Mutex    // serializes wheel injection with fullscreen transitions
-	lastResizeW                int           // and the size it was resized to
+	fsMu                       sync.Mutex // serializes wheel injection with fullscreen transitions
+	lastResizeW                int        // and the size it was resized to
 	lastResizeH                int
 	logs                       []logEntry  // recent status/error messages, shown in the logs panel
 	refreshBusy                atomic.Bool // true while a background session refresh is in flight
@@ -257,10 +247,6 @@ func (a *App) Gui() *gocui.Gui {
 	return a.g
 }
 
-// refreshPaneMode refreshes the cached pane input mode for the current
-// fullscreen target, off the event loop. The wheel uses this cache instead
-// of a per-event blocking lookup, so forwarded input stays in one ordered
-// stream with keyboard input.
 // refreshSessionsAsync fetches the session list in a background goroutine and
 // updates the cache via gui.Update. Skipped if a refresh is already in flight.
 // The busy flag is atomic: it is read here from the ticker goroutine and
@@ -330,11 +316,6 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 					if ident := sessionIdentity(s); a.fullscreenIdent != "" && ident != a.fullscreenIdent {
 						a.fullscreenIdent = ident
 						a.scroll.Exit()
-						// The cached pane mode belongs to the dead pane.
-						a.modeGen.Add(1)
-						a.modeMu.Lock()
-						a.modeTarget = ""
-						a.modeMu.Unlock()
 					}
 					break
 				}
@@ -487,10 +468,6 @@ func (a *App) exitFullScreen() {
 	a.fullscreen.Exit()
 	a.fullscreenNoScrollback = false
 	a.fullscreenIdent = ""
-	a.modeGen.Add(1)
-	a.modeMu.Lock()
-	a.modeTarget = ""
-	a.modeMu.Unlock()
 	a.preview.Invalidate()
 }
 
