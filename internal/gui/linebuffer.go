@@ -107,15 +107,37 @@ func (b *LineBuffer) update(scr []string) []string {
 		// dropped lines (rotations replay them), and larger blocks unless
 		// they repaint the same screen region (a mid-screen edit masquerades
 		// as a large shift with an all-known bottom block).
-		// A block that merely re-reveals the buffer's tail (a
-		// reverse-then-forward step) must not duplicate it: the same text
-		// appearing elsewhere on screen makes it a genuine new occurrence.
-		replaysTail := majorityEqual(added, b.lines[len(b.lines)-len(added):]) &&
-			!slices.Contains(scr[:n-d], added[len(added)-1])
-		smallBlock := len(added) <= max(2, n/5) && !majorityEqual(added, prevScreen[:d])
-		if majorityFresh(added, b.lines) ||
-			(!majorityEqual(added, prevScreen[:d]) &&
-				!replaysTail && (smallBlock || !majorityEqual(added, prevScreen[n-d:]))) {
+		if majorityFresh(added, b.lines) {
+			return capLines(append(b.lines, added...), b.cap)
+		}
+		// Small repeated blocks: a reverse-then-forward step re-reveals a
+		// row that scrolled off and is already retained — appending would
+		// duplicate it. A genuine new occurrence shows up as MORE copies of
+		// the text on screen than in the buffer's recent window.
+		if len(added) <= max(2, n/5) && !majorityEqual(added, prevScreen[:d]) {
+			last := added[len(added)-1]
+			scrCount := 0
+			for _, l := range scr {
+				if l == last {
+					scrCount++
+				}
+			}
+			window := b.lines
+			if len(window) > 2*n {
+				window = window[len(window)-2*n:]
+			}
+			bufCount := 0
+			for _, l := range window {
+				if l == last {
+					bufCount++
+				}
+			}
+			if scrCount > bufCount {
+				return capLines(append(b.lines, added...), b.cap)
+			}
+			return capLines(b.lines, b.cap)
+		}
+		if !majorityEqual(added, prevScreen[:d]) && !majorityEqual(added, prevScreen[n-d:]) {
 			return capLines(append(b.lines, added...), b.cap)
 		}
 	}
