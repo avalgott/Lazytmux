@@ -1558,7 +1558,7 @@ func TestEnterFullScreenClearsScrollHint(t *testing.T) {
 	assert.Equal(t, "", app.scrollHintName, "entering fullscreen clears the dashboard scroll hint")
 }
 
-func TestTabExitsPreviewScroll(t *testing.T) {
+func TestTabPreservesPreviewScroll(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox"}}
 	app.previewScrollTarget = "devbox"
@@ -1566,8 +1566,8 @@ func TestTabExitsPreviewScroll(t *testing.T) {
 	app.focusMain = true
 
 	require.NoError(t, app.cycleFocusHandler(app.g, nil))
-	assert.False(t, app.previewScroll.IsActive(), "Tab focus change returns the preview to the live capture")
-	assert.Equal(t, "", app.previewScrollTarget)
+	assert.True(t, app.previewScroll.IsActive(), "Tab focus change keeps the frozen scroll position")
+	assert.Equal(t, "devbox", app.previewScrollTarget)
 }
 
 func TestWheelUpSkippedWhileHintActive(t *testing.T) {

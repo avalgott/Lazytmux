@@ -211,15 +211,14 @@ func (a *App) cursorMoveHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 // cycleFocusHandler toggles dashboard focus between the sessions list and the
 // main preview panel. Guarded against dialogs (their inputs have their own
 // bindings) and fullscreen (Tab is forwarded to the pane in live mode and
-// must not leak into a focus change in scroll mode). Focus changes end
-// preview scrolling: the options bar advertises j/k as scrolling only while
-// the mode is active.
+// must not leak into a focus change in scroll mode). An active preview scroll
+// survives the focus change: the frozen snapshot keeps its position while the
+// user peeks at the session list — it only resets on the documented events
+// (selecting a different session, resizing, entering fullscreen, or the
+// target disappearing).
 func (a *App) cycleFocusHandler(g *gocui.Gui, v *gocui.View) error {
 	if a.dialog != DialogNone || a.fullscreen.IsActive() {
 		return nil
-	}
-	if a.previewScroll.IsActive() {
-		a.exitPreviewScroll()
 	}
 	a.focusMain = !a.focusMain
 	// Apply the view focus immediately: the redraw is queued, but keys
