@@ -2907,12 +2907,13 @@ func TestHintInvalidatedByPaneChange(t *testing.T) {
 func TestAdoptPaneReservesCaptureSequence(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 1, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	cs := app.captureSeq.Add(1)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), cs, session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
 
 	app.adoptPaneIfStale("devbox", "%1", "%2")
 	// A live capture started before the adoption completes afterwards: its
 	// pane must not rebind the session back.
-	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), 1, session.Preview{Content: "Q", Full: "Q", PaneID: "%1"}, nil)
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), cs, session.Preview{Content: "Q", Full: "Q", PaneID: "%1"}, nil)
 	app.buffersMu.Lock()
 	recorded := app.paneIDs["devbox"]
 	app.buffersMu.Unlock()
