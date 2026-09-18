@@ -14,8 +14,9 @@ type LineBuffer struct {
 	mu      sync.Mutex
 	lines   []string
 	cap     int
-	lastRaw string // last raw capture; an idle pane feeds identical content
-	screenH int    // normalized height of the current screen (blank rows stripped)
+	lastRaw string   // last raw capture; an idle pane feeds identical content
+	screenH int      // normalized height of the current screen (blank rows stripped)
+	screen  []string // the last normalized screen — alignment diffs against this
 }
 
 // NewLineBuffer creates a buffer that keeps at most cap lines.
@@ -65,6 +66,10 @@ func (b *LineBuffer) SnapshotWithHeight() ([]string, int) {
 }
 
 // update applies the diff-append algorithm. The caller holds the lock.
+//
+// Alignment diffs against the last normalized SCREEN (b.screen), not the
+// buffer tail: reverse scrolling prepends rows, so the tail would drift
+// away from the actual screen and misalign the next feed.
 func (b *LineBuffer) update(scr []string) []string {
 	// A shell's cursor row is always blank at the bottom and never scrolls
 	// with the content — it is re-created each line. Strip it so the shift
@@ -76,6 +81,7 @@ func (b *LineBuffer) update(scr []string) []string {
 	prev := b.screenH
 	b.screenH = n
 	if len(b.lines) == 0 {
+		b.screen = scr
 		return capLines(scr, b.cap)
 	}
 	// An all-blank screen (e.g. a resize that only changes the number of
@@ -84,12 +90,17 @@ func (b *LineBuffer) update(scr []string) []string {
 	if n == 0 {
 		return capLines(b.lines, b.cap)
 	}
-	tail := b.lines
-	if len(tail) > n {
-		tail = tail[len(tail)-n:]
+	prevScreen := b.screen
+	if len(prevScreen) == 0 {
+		prevScreen = b.lines
+		if len(prevScreen) > n {
+			prevScreen = prevScreen[len(prevScreen)-n:]
+		}
 	}
-	// Scroll-up: suffix of tail matches prefix of scr.
-	if d, ok := shiftUp(tail, scr); ok && d > 0 {
+	b.screen = scr
+
+	// Scroll-up: suffix of the previous screen matches the prefix of scr.
+	if d, ok := shiftUp(prevScreen, scr); ok && d > 0 {
 		added := scr[n-d:]
 		// Accept a shift when most added lines are novel; when they repeat
 		// recent output, still accept small blocks that do not replay the
@@ -97,23 +108,23 @@ func (b *LineBuffer) update(scr []string) []string {
 		// they repaint the same screen region (a mid-screen edit masquerades
 		// as a large shift with an all-known bottom block).
 		if majorityFresh(added, b.lines) ||
-			(!majorityEqual(added, tail[:d]) &&
-				(len(added) <= max(2, n/5) || !majorityEqual(added, tail[n-d:]))) {
+			(!majorityEqual(added, prevScreen[:d]) &&
+				(len(added) <= max(2, n/5) || !majorityEqual(added, prevScreen[n-d:]))) {
 			return capLines(append(b.lines, added...), b.cap)
 		}
 	}
-	// Scroll-down: prefix of tail matches suffix of scr. Reverse scrolling
-	// re-reveals lines the buffer already holds. Repeated text is NOT a
-	// global identity: the revealed block is reconciled positionally
-	// against the buffer's head (a consecutive reverse step's overlap), and
-	// a rotation — where the revealed block replays the rows it dropped
-	// from the tail — keeps the buffer unchanged.
-	if d, ok := shiftDown(tail, scr); ok && d > 0 {
+	// Scroll-down: prefix of the previous screen matches the suffix of scr.
+	// Reverse scrolling re-reveals lines the buffer already holds. Repeated
+	// text is NOT a global identity: the revealed block is reconciled
+	// positionally against the buffer's head (a consecutive reverse step's
+	// overlap), and a rotation — where the revealed block replays the rows
+	// it dropped from the tail — keeps the buffer unchanged.
+	if d, ok := shiftDown(prevScreen, scr); ok && d > 0 {
 		added := scr[:d]
 		if majorityFresh(added, b.lines) {
 			return capLines(append(append([]string(nil), added...), b.lines...), b.cap)
 		}
-		if majorityEqual(added, tail[len(tail)-d:]) {
+		if majorityEqual(added, prevScreen[len(prevScreen)-d:]) {
 			return capLines(b.lines, b.cap)
 		}
 		k := len(added)
@@ -133,17 +144,16 @@ func (b *LineBuffer) update(scr []string) []string {
 	// leave the old screen's tail behind as fake history).
 	//
 	// A size mismatch can also hide a genuine scroll (blank-line stripping
-	// shrinks the screen; an interior blank grows it): when the old tail's
+	// shrinks the screen; an interior blank grows it): when the old screen's
 	// suffix overlaps the new screen's head, the transformation was a scroll
 	// in disguise — append the new portion instead of replacing. Equal-height
 	// redraws are handled by the shift checks above; an incidental one-row
 	// overlap must not manufacture history, so this path requires a height
 	// change.
 	if n != prev && len(b.lines) >= prev {
-		tail := b.lines[len(b.lines)-prev:]
 		o := 0
-		for k := 1; k <= len(tail) && k <= len(scr); k++ {
-			if slices.Equal(tail[len(tail)-k:], scr[:k]) {
+		for k := 1; k <= len(prevScreen) && k <= len(scr); k++ {
+			if slices.Equal(prevScreen[len(prevScreen)-k:], scr[:k]) {
 				o = k
 			}
 		}
@@ -155,10 +165,12 @@ func (b *LineBuffer) update(scr []string) []string {
 			}
 			// A scroll in disguise — unless the new portion replays the
 			// dropped head (that is a rotation, handled by the replace).
-			if !majorityEqual(scr[o:], tail[:len(tail)-o]) {
+			if !majorityEqual(scr[o:], prevScreen[:len(prevScreen)-o]) {
 				return capLines(append(b.lines, scr[o:]...), b.cap)
 			}
 		}
+	}
+	if len(b.lines) >= prev {
 		prefix := b.lines[:len(b.lines)-prev]
 		// The largest suffix of the history prefix that equals the head of
 		// the new screen is one shared region: drop the duplicated head.

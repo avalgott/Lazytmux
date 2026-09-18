@@ -339,3 +339,24 @@ func TestLineBufferRepeatedLineReverseScroll(t *testing.T) {
 	assert.Equal(t, []string{"X", "A", "X", "B", "C", "D"}, b.Snapshot(),
 		"a repeated line revealed by reverse scrolling is a distinct row")
 }
+
+func TestLineBufferReverseThenForwardKeepsHistory(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"))
+	b.Feed(screen("L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"))
+	b.Feed(screen("L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"))
+	snap := b.Snapshot()
+	assert.Equal(t, []string{"L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"}, snap,
+		"reverse-then-forward must neither drop nor duplicate rows")
+}
+
+func TestLineBufferReverseReverseForwardKeepsHistory(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"))
+	b.Feed(screen("L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"))
+	b.Feed(screen("L03", "L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12"))
+	b.Feed(screen("L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"))
+	snap := b.Snapshot()
+	assert.Equal(t, []string{"L03", "L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"}, snap,
+		"intermediate forward steps must not duplicate rows")
+}
