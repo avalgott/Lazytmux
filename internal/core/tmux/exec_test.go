@@ -344,3 +344,18 @@ func TestSplitCursorPair(t *testing.T) {
 		})
 	}
 }
+
+func TestParseSessionsWithServerPID(t *testing.T) {
+	t.Parallel()
+	in := "devbox\t$4\t/home/u\t1\t2\t1789610227\t1849982\nlogs\t$1\t/var/log\t0\t1\t1789573550\t1849982"
+	sessions := parseSessions(in)
+	require.Len(t, sessions, 2)
+	assert.Equal(t, SessionInfo{
+		Name: "devbox", ID: "$4", Path: "/home/u", Attached: true, Windows: 2,
+		Created: 1789610227, ServerPID: 1849982,
+	}, sessions[0], "the seventh field is the server incarnation PID")
+	assert.Equal(t, SessionInfo{
+		Name: "logs", ID: "$1", Path: "/var/log", Attached: false, Windows: 1,
+		Created: 1789573550, ServerPID: 1849982,
+	}, sessions[1])
+}
