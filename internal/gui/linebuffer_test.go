@@ -360,3 +360,12 @@ func TestLineBufferReverseReverseForwardKeepsHistory(t *testing.T) {
 	assert.Equal(t, []string{"L03", "L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"}, snap,
 		"intermediate forward steps must not duplicate rows")
 }
+
+func TestLineBufferHalfScreenJumpKeepsAllRows(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("L00", "L01", "L02", "L03", "L04", "L05", "L06", "L07", "L08", "L09"))
+	// A burst scrolls the pane by half a screen between captures.
+	b.Feed(screen("L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"))
+	want := []string{"L00", "L01", "L02", "L03", "L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"}
+	assert.Equal(t, want, b.Snapshot(), "a half-screen jump must retain the scrolled-off rows")
+}

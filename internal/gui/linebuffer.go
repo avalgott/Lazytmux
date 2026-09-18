@@ -216,7 +216,9 @@ func (b *LineBuffer) update(scr []string) []string {
 }
 
 // shiftUp returns the scroll-up shift d (0 = identical) where
-// tail[d:] == scr[:n-d] with overlap at least max(2, 60% of n).
+// tail[d:] == scr[:n-d] with at least a two-line overlap. Redraw
+// protection lives in the caller's acceptance checks (freshness, rotation
+// replay, and same-region repaint), not in a fixed overlap ratio.
 func shiftUp(tail, scr []string) (int, bool) {
 	n := len(scr)
 	if len(tail) < n {
@@ -224,7 +226,7 @@ func shiftUp(tail, scr []string) (int, bool) {
 	}
 	for d := 0; d < n; d++ {
 		ov := n - d
-		if ov < max(2, n*3/5) {
+		if ov < 2 {
 			return 0, false
 		}
 		if slices.Equal(tail[d:], scr[:ov]) {
@@ -242,7 +244,7 @@ func shiftDown(tail, scr []string) (int, bool) {
 	}
 	for d := 0; d < n; d++ {
 		ov := n - d
-		if ov < max(2, n*3/5) {
+		if ov < 2 {
 			return 0, false
 		}
 		if slices.Equal(tail[:ov], scr[d:]) {
