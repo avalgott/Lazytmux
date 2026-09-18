@@ -381,6 +381,9 @@ func (a *App) adoptPaneIfStale(name, fetchRecorded, paneID string) bool {
 		delete(a.bufferGens, name)
 	}
 	a.paneIDs[name] = paneID
+	// Reserve a fresh capture sequence: live captures already in flight
+	// started before this adoption and must not rebind the session back.
+	a.paneSeq[name] = a.captureSeq.Add(1)
 	return true
 }
 
