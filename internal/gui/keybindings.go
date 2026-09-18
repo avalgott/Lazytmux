@@ -443,7 +443,14 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 				if hasPos {
 					cx, cy = x, y
 				}
-				if ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy); ferr == nil {
+				// Send to the VALIDATED pane ID, not the session name: a
+				// tmux-side pane switch between the cache refresh and the
+				// send would otherwise redirect the injection.
+				sendTarget := target
+				if pane != "" {
+					sendTarget = pane
+				}
+				if ferr := a.svc.ForwardMouseWheel(context.Background(), sendTarget, delta < 0, cx, cy); ferr == nil {
 					return
 				}
 			}

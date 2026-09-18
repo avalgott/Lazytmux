@@ -3020,5 +3020,5 @@ func TestWheelForwardsSynchronouslyViaCachedMode(t *testing.T) {
 
 	app.wheelHandlerAt(-3, 12, 7)
 	require.Len(t, p.wheelSnapshot(), 1, "the wheel must forward immediately and synchronously")
-	assert.Equal(t, wheelCall{name: "devbox", up: true, x: 12, y: 7}, p.wheelSnapshot()[0])
+	assert.Equal(t, wheelCall{name: "%5", up: true, x: 12, y: 7}, p.wheelSnapshot()[0])
 }

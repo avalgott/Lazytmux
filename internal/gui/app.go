@@ -506,6 +506,9 @@ func (a *App) enterFullScreen() {
 	a.preview.Invalidate()
 	a.fullscreenIdent = sessionIdentity(*sess)
 	a.fullscreen.Enter(sess.Name)
+	// Warm the pane-mode cache immediately: the first wheel events must
+	// forward without waiting for the next ticker pass.
+	a.refreshPaneMode()
 }
 
 // exitFullScreen returns to the dashboard layout.
