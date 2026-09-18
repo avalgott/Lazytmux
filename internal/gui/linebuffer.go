@@ -79,8 +79,9 @@ func (b *LineBuffer) update(scr []string) []string {
 		return capLines(scr, b.cap)
 	}
 	// An all-blank screen (e.g. a resize that only changes the number of
-	// blank cursor rows) must not reseed over retained history.
-	if n == 0 && prev == 0 {
+	// blank cursor rows) has nothing to replace the screen region with:
+	// keep the accumulated history instead of erasing it.
+	if n == 0 {
 		return capLines(b.lines, b.cap)
 	}
 	tail := b.lines
