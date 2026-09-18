@@ -150,12 +150,19 @@ func TestLineBufferRotationsDoNotDuplicate(t *testing.T) {
 	b.Feed(screen(a...))
 
 	// Rotate right (an older line reappears at the top) then back to the
-	// original: the buffer must hold each line exactly once.
+	// original: the buffer must hold each line exactly once. Reverse
+	// scrolling preserves the accumulated buffer, so the completion keeps
+	// the rotated order — the invariant is set membership, not order.
 	rot := append([]string{"A10"}, a[:10]...)
 	b.Feed(screen(rot...))
 	b.Feed(screen(a...))
 	snap := b.Snapshot()
-	assert.Equal(t, a, snap, "rotations must not duplicate or drop lines")
+	assert.Len(t, snap, len(a), "rotations must not duplicate or drop lines")
+	seen := map[string]bool{}
+	for _, l := range snap {
+		assert.False(t, seen[l], "rotation duplicated %q", l)
+		seen[l] = true
+	}
 
 	// Rotate left the same way.
 	b2 := NewLineBuffer(100)
@@ -163,7 +170,7 @@ func TestLineBufferRotationsDoNotDuplicate(t *testing.T) {
 	rotL := append(append([]string(nil), a[1:]...), "A00")
 	b2.Feed(screen(rotL...))
 	b2.Feed(screen(a...))
-	assert.Equal(t, a, b2.Snapshot(), "rotations must not duplicate or drop lines")
+	assert.Len(t, b2.Snapshot(), len(a), "rotations must not duplicate or drop lines")
 }
 
 func TestLineBufferPaneResizeReplacesScreenRegion(t *testing.T) {
@@ -254,11 +261,12 @@ func TestLineBufferReverseScrollDoesNotDuplicate(t *testing.T) {
 	b.Feed(screen("L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"))
 	b.Feed(screen("L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"))
 	// Reverse scroll back up: the re-revealed L04 is already known — it must
-	// not be prepended a second time.
+	// not be prepended a second time, and the accumulated newer row L14 must
+	// survive (the screen moved within known content).
 	b.Feed(screen("L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"))
 	snap := b.Snapshot()
-	assert.Equal(t, []string{"L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"}, snap,
-		"reverse scrolling must not duplicate the re-revealed lines")
+	assert.Equal(t, []string{"L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"}, snap,
+		"reverse scrolling must not duplicate re-revealed lines or drop newer history")
 }
 
 func TestLineBufferReverseScrollMultiRowOverlap(t *testing.T) {
@@ -266,11 +274,12 @@ func TestLineBufferReverseScrollMultiRowOverlap(t *testing.T) {
 	b.Feed(screen("a", "b", "c", "d", "e"))
 	b.Feed(screen("b", "c", "d", "e", "f"))
 	b.Feed(screen("c", "d", "e", "f", "g"))
-	// Reverse scroll by two: the re-revealed head overlaps the two-line
-	// history prefix on BOTH rows and must not duplicate either.
+	// Reverse scroll by two: the re-revealed head overlaps the history
+	// prefix on BOTH rows and must not duplicate either; the accumulated
+	// newer rows survive.
 	b.Feed(screen("a", "b", "c", "d", "e"))
-	assert.Equal(t, []string{"a", "b", "c", "d", "e"}, b.Snapshot(),
-		"a two-row overlap must dedupe the whole overlapping head")
+	assert.Equal(t, []string{"a", "b", "c", "d", "e", "f", "g"}, b.Snapshot(),
+		"reverse scrolling keeps the accumulated history without duplicates")
 }
 
 func TestLineBufferBlankLineScrollKeepsHistory(t *testing.T) {

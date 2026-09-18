@@ -98,13 +98,15 @@ func (b *LineBuffer) update(scr []string) []string {
 	}
 	// Scroll-down: prefix of tail matches suffix of scr. Reverse scrolling
 	// re-reveals lines the buffer already holds — only genuinely new older
-	// content may be prepended, or every reverse frame would duplicate the
-	// re-revealed lines.
+	// content may be prepended. Re-revealed rows keep the buffer AS IS: the
+	// screen moved within the known content, and the newer rows the program
+	// scrolled past remain accumulated history.
 	if d, ok := shiftDown(tail, scr); ok && d > 0 {
 		added := scr[:d]
 		if majorityFresh(added, b.lines) {
 			return capLines(append(append([]string(nil), added...), b.lines...), b.cap)
 		}
+		return capLines(b.lines, b.cap)
 	}
 	// In-place edit, full redraw, or a resized pane: replace the PREVIOUS
 	// screen region (its height, not the new one — a shrunk pane must not
