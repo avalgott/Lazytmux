@@ -683,7 +683,6 @@ func TestScrollModeCtrlKeysDoNotForward(t *testing.T) {
 	assert.Empty(t, keys, "nothing may be forwarded to the pane in scroll mode")
 }
 
-
 func TestFullScreenAutoExitWhenSessionDies(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox"}, {Name: "logs"}}
@@ -1252,9 +1251,6 @@ func TestPreviewScrollZeroHistoryExitsWithStatus(t *testing.T) {
 
 // --- Wheel passthrough for mouse-tracking panes in fullscreen ---
 
-
-
-
 // --- Log dedupe ---
 
 func TestLogsDedupeConsecutiveMessages(t *testing.T) {
@@ -1542,7 +1538,6 @@ func TestEnterFullScreenClearsScrollHint(t *testing.T) {
 	assert.Equal(t, "", app.scrollHintName, "entering fullscreen clears the dashboard scroll hint")
 }
 
-
 func TestTabExitsPreviewScroll(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox"}}
@@ -1656,8 +1651,6 @@ func TestTopThenDownExitsWhileLoading(t *testing.T) {
 	require.NoError(t, app.cursorMoveHandler(1)(app.g, nil))
 	assert.False(t, app.previewScroll.IsActive(), "g then j while loading must not freeze the preview at the bottom")
 }
-
-
 
 // --- Copilot round-5 fixes ---
 
@@ -1802,7 +1795,6 @@ func TestMarkFetchedRecordsGeneration(t *testing.T) {
 	app.preview.Unlock()
 }
 
-
 // --- Copilot round-9 fixes: conditional hint wording, single-impulse wheel ---
 
 func TestScrollHintOffersEnterOnlyWhenForwardingAvailable(t *testing.T) {
@@ -1846,8 +1838,6 @@ func TestSessionGenAdvancesOnRecreatedIDWithNewCreated(t *testing.T) {
 	assert.NotEqual(t, gen, app.sessionGen.Load(), "a recycled ID with a new creation time is a new session")
 }
 
-
-
 func TestClampWheelCoordsWithinView(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	require.NoError(t, app.layout(app.g))
@@ -1862,7 +1852,6 @@ func TestClampWheelCoordsWithinView(t *testing.T) {
 	assert.Equal(t, 5, x)
 	assert.Equal(t, 5, y)
 }
-
 
 // --- Copilot round-11 fixes ---
 
@@ -1902,7 +1891,6 @@ func TestApplyNoHistoryHintWithForwarding(t *testing.T) {
 }
 
 // --- Copilot round-12 fixes ---
-
 
 func TestScrollHintNotInheritedByRecycledID(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
@@ -1962,7 +1950,6 @@ func TestPreviewScrollExitsOnRecycledID(t *testing.T) {
 
 // --- Copilot round-14 fix: no input injection after leaving fullscreen ---
 
-
 // --- Copilot round-15 fixes ---
 
 func TestPositionlessFullscreenWheelIgnored(t *testing.T) {
@@ -1978,20 +1965,13 @@ func TestPositionlessFullscreenWheelIgnored(t *testing.T) {
 	assert.False(t, app.scroll.IsActive())
 }
 
-
 // --- Copilot round-16 fixes ---
-
 
 // --- Copilot round-17 fix: forwards invalidated by scroll-mode transitions ---
 
-
 // --- Copilot round-18 fixes: ordered wheel processing ---
 
-
-
 // --- Copilot round-19 fixes ---
-
-
 
 // --- Copilot round-20 fixes ---
 
@@ -2022,7 +2002,6 @@ func TestSessionGenAdvancesOnServerRestart(t *testing.T) {
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 100, ServerPID: 2222}}, nil)
 	assert.NotEqual(t, gen, app.sessionGen.Load(), "a server restart must invalidate even with recycled ID and same-second creation")
 }
-
 
 // --- Copilot round-22 fixes ---
 
@@ -2113,12 +2092,9 @@ func TestPageStepAtLeastOneLine(t *testing.T) {
 	assert.Equal(t, 0, ss.offsetFromBottom)
 }
 
-
 // --- Copilot round-26 fixes ---
 
-
 // --- Copilot round-27 fixes ---
-
 
 // --- Copilot round-30 fixes ---
 
@@ -2170,7 +2146,6 @@ func TestBufferResetOnActivePaneChange(t *testing.T) {
 	assert.Equal(t, []string{"pane-two-content"}, snap, "the active pane changed: the old pane's buffer must be dropped")
 }
 
-
 // --- Copilot round-33 fixes ---
 
 func TestUnboundBufferKeptWhenUnrelatedSessionChanges(t *testing.T) {
@@ -2183,7 +2158,6 @@ func TestUnboundBufferKeptWhenUnrelatedSessionChanges(t *testing.T) {
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}, {Name: "other", ID: "$9"}}, nil)
 	assert.NotNil(t, app.bufferLookup("devbox"), "an unrelated session change must not drop this session's history")
 }
-
 
 // --- Copilot round-34 fixes ---
 
@@ -2545,4 +2519,21 @@ func TestWheelForwardsSynchronouslyViaCachedMode(t *testing.T) {
 	app.wheelHandlerAt(-3, 12, 7)
 	require.Len(t, p.wheelSnapshot(), 1, "the wheel must forward immediately and synchronously")
 	assert.Equal(t, wheelCall{name: "%5", up: true, x: 12, y: 7}, p.wheelSnapshot()[0])
+}
+
+// --- Copilot round-49 fixes ---
+
+func TestEnterFullScreenWarmsModeSynchronously(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5"}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+
+	app.enterFullScreen()
+	app.modeMu.Lock()
+	target := app.modeTarget
+	alt, sgr := app.modeAlt, app.modeSgr
+	app.modeMu.Unlock()
+	assert.Equal(t, "devbox", target, "the mode cache warms synchronously on entry")
+	assert.True(t, alt && sgr, "the cached mode reflects the pane's flags")
 }

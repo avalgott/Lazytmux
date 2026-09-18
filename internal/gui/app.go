@@ -257,6 +257,27 @@ func (a *App) Gui() *gocui.Gui {
 // fullscreen target, off the event loop. The wheel uses this cache instead
 // of a per-event blocking lookup, so forwarded input stays in one ordered
 // stream with keyboard input.
+// refreshPaneModeSync refreshes the cached pane input mode inline (the
+// fullscreen-entry warm-up; one blocking tmux call is acceptable there).
+func (a *App) refreshPaneModeSync() {
+	if !a.fullscreen.IsActive() {
+		return
+	}
+	target := a.fullscreen.Target()
+	if target == "" {
+		return
+	}
+	alt, sgr, cx, cy, pane, err := a.svc.PaneInputFlags(context.Background(), target)
+	if err != nil {
+		return
+	}
+	a.modeMu.Lock()
+	a.modeTarget, a.modeAlt, a.modeSgr = target, alt, sgr
+	a.modeX, a.modeY, a.modePane = cx, cy, pane
+	a.modeAt = time.Now()
+	a.modeMu.Unlock()
+}
+
 func (a *App) refreshPaneMode() {
 	if !a.fullscreen.IsActive() {
 		return
@@ -487,9 +508,10 @@ func (a *App) enterFullScreen() {
 	a.preview.Invalidate()
 	a.fullscreenIdent = sessionIdentity(*sess)
 	a.fullscreen.Enter(sess.Name)
-	// Warm the pane-mode cache immediately: the first wheel events must
-	// forward without waiting for the next ticker pass.
-	a.refreshPaneMode()
+	// Warm the pane-mode cache synchronously: the first wheel event must
+	// forward without waiting for the ticker, and an asynchronous warm-up
+	// could lose the race with an immediate first wheel.
+	a.refreshPaneModeSync()
 }
 
 // exitFullScreen returns to the dashboard layout.
