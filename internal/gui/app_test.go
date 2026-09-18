@@ -2955,3 +2955,23 @@ func TestNoHistoryRechecksPaneAtApply(t *testing.T) {
 	app.applyNoHistory("devbox", seq, false, false, "%1", "%1", false)
 	assert.Equal(t, "", app.scrollHintName, "the stale pane's verdict must not install against the replacement")
 }
+
+// --- Copilot round-45 fix ---
+
+func TestSettlePaneLockedStaleSnapshotRejected(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), app.captureSeq.Add(1), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+
+	// A fetch-time binding of "%1" adopts "%2"...
+	app.fsMu.Lock()
+	ok := app.settlePaneLocked("devbox", "%1", "%2")
+	app.fsMu.Unlock()
+	assert.True(t, ok)
+
+	// ...and a snapshot fetched against "%1" is now stale.
+	app.fsMu.Lock()
+	ok = app.settlePaneLocked("devbox", "%1", "%3")
+	app.fsMu.Unlock()
+	assert.False(t, ok, "a snapshot whose fetch-time binding is gone must be rejected")
+}

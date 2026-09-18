@@ -254,17 +254,19 @@ func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID, fetchRecorded stri
 		}
 		return
 	}
-	// The pane must be settled BEFORE the snapshot installs: if a newer live
-	// capture owns the pane, this snapshot is stale and the load restarts.
-	if !a.paneMatches(a.fullscreen.Target(), paneID) {
-		if !a.adoptPaneIfStale(a.fullscreen.Target(), fetchRecorded, paneID) {
-			if a.scroll.IsActive() && a.scroll.seq == seq {
-				a.restartScrollLoad()
-			}
-			return
+	// The pane settles and the snapshot installs in ONE fsMu section — a
+	// concurrent live capture cannot rebind between the validation and the
+	// install. A newer binding makes the snapshot stale: restart.
+	a.fsMu.Lock()
+	if !a.settlePaneLocked(a.fullscreen.Target(), fetchRecorded, paneID) {
+		a.fsMu.Unlock()
+		if a.scroll.IsActive() && a.scroll.seq == seq {
+			a.restartScrollLoad()
 		}
+		return
 	}
 	applied, noHistory, err := a.applyScrollLoadState(a.scroll, seq, lines, paneH, loadErr)
+	a.fsMu.Unlock()
 	if err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))
 		a.exitScrollMode()
@@ -370,21 +372,35 @@ func (a *App) fetchScrollSnapshot(target string, width int) ([]string, int, stri
 // between wins: the stale snapshot must not overwrite it or drop its
 // buffer. The check and the adoption are one critical section.
 func (a *App) adoptPaneIfStale(name, fetchRecorded, paneID string) bool {
+	a.fsMu.Lock()
+	defer a.fsMu.Unlock()
+	return a.settlePaneLocked(name, fetchRecorded, paneID)
+}
+
+// settlePaneLocked validates (and possibly adopts) the pane a scroll load
+// came from. The caller holds fsMu; buffersMu is taken inside — the same
+// order the refresh and the capture recording use. Returns false when a
+// newer binding owns the pane (the snapshot is stale).
+func (a *App) settlePaneLocked(name, fetchRecorded, paneID string) bool {
 	if paneID == "" {
 		return true
 	}
-	a.fsMu.Lock()
-	defer a.fsMu.Unlock()
 	a.buffersMu.Lock()
 	defer a.buffersMu.Unlock()
-	if a.paneIDs[name] != fetchRecorded {
+	recorded := a.paneIDs[name]
+	if recorded == "" || recorded == paneID {
+		if recorded == "" {
+			a.paneIDs[name] = paneID
+			a.paneSeq[name] = a.captureSeq.Add(1)
+		}
+		return true
+	}
+	if recorded != fetchRecorded {
 		return false // a newer capture rebound the pane — this snapshot is stale
 	}
-	if fetchRecorded != "" {
-		delete(a.buffers, name)
-		delete(a.bufferIDs, name)
-		delete(a.bufferGens, name)
-	}
+	delete(a.buffers, name)
+	delete(a.bufferIDs, name)
+	delete(a.bufferGens, name)
 	a.paneIDs[name] = paneID
 	// Reserve a fresh capture sequence: live captures already in flight
 	// started before this adoption and must not rebind the session back.
@@ -551,17 +567,19 @@ func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID, fetchRecord
 		}
 		return
 	}
-	// The pane must be settled BEFORE the snapshot installs: if a newer live
-	// capture owns the pane, this snapshot is stale and the load restarts.
-	if !a.paneMatches(a.previewScrollTarget, paneID) {
-		if !a.adoptPaneIfStale(a.previewScrollTarget, fetchRecorded, paneID) {
-			if a.previewScroll.IsActive() && a.previewScroll.seq == seq {
-				a.restartPreviewScrollLoad()
-			}
-			return
+	// The pane settles and the snapshot installs in ONE fsMu section — a
+	// concurrent live capture cannot rebind between the validation and the
+	// install. A newer binding makes the snapshot stale: restart.
+	a.fsMu.Lock()
+	if !a.settlePaneLocked(a.previewScrollTarget, fetchRecorded, paneID) {
+		a.fsMu.Unlock()
+		if a.previewScroll.IsActive() && a.previewScroll.seq == seq {
+			a.restartPreviewScrollLoad()
 		}
+		return
 	}
 	applied, noHistory, err := a.applyScrollLoadState(a.previewScroll, seq, lines, paneH, loadErr)
+	a.fsMu.Unlock()
 	if err != nil {
 		a.setError(fmt.Sprintf("scrollback: %v", err))
 		a.exitPreviewScroll()
@@ -597,6 +615,9 @@ func (a *App) applyNoHistory(name string, seq int64, alt, sgr bool, qPane, paneI
 	// The pane may have changed since the query returned (or the query may
 	// have failed with an empty pane): recheck the recorded binding before
 	// the verdict installs, so it never lands against the replacement pane.
+	// The check and the install are one fsMu section.
+	a.fsMu.Lock()
+	defer a.fsMu.Unlock()
 	a.buffersMu.Lock()
 	recorded := a.paneIDs[name]
 	a.buffersMu.Unlock()
