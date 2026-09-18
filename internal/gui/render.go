@@ -54,7 +54,8 @@ func (a *App) renderPreview(v *gocui.View) {
 	hintPane := a.paneIDs[sess.Name]
 	a.buffersMu.Unlock()
 	if !a.fullscreen.IsActive() && a.scrollHintName == sess.Name && a.scrollHintIdent == sessionIdentity(*sess) &&
-		a.scrollHintPane == hintPane && time.Now().Before(a.scrollHintUntil) {
+		a.scrollHintPane == hintPane && time.Now().Before(a.scrollHintUntil) &&
+		!a.bufferHasHistory(sess.Name) {
 		v.Title = " " + a.scrollHintMsg + " "
 	}
 

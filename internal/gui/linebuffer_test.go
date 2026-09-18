@@ -297,3 +297,13 @@ func TestLineBufferBlankLineScrollKeepsHistory(t *testing.T) {
 	b2.Feed(screen("b", "c", "", "d"))
 	assert.Equal(t, []string{"a", "b", "c", "", "d"}, b2.Snapshot())
 }
+
+func TestLineBufferConsecutiveReverseScrollsRetainAll(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"))
+	b.Feed(screen("L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13"))
+	b.Feed(screen("L03", "L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12"))
+	snap := b.Snapshot()
+	want := []string{"L03", "L04", "L05", "L06", "L07", "L08", "L09", "L10", "L11", "L12", "L13", "L14"}
+	assert.Equal(t, want, snap, "every newly revealed older row must be retained across consecutive reverse scrolls")
+}

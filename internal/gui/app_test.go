@@ -2635,3 +2635,26 @@ func TestModeRefreshInflightGuard(t *testing.T) {
 		return app.modeTarget == "devbox" && time.Since(app.modeAt) < time.Minute
 	}, time.Second, 10*time.Millisecond)
 }
+
+// --- Copilot round-56 fixes ---
+
+func TestTitleHintHiddenWhenBufferGainedHistory(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), app.captureSeq.Add(1), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.scrollHintName = "devbox"
+	app.scrollHintIdent = sessionIdentity(app.sessions[0])
+	app.scrollHintMsg = "No scrollback available. Hit Enter to open the session and scrollback inside of it."
+	app.scrollHintPane = "%1"
+	app.scrollHintUntil = time.Now().Add(time.Minute)
+
+	// The program starts streaming within the hint window.
+	app.feedBuffer("devbox", "h1\nh2\nh3\nh4\nh5\nh6\nh7")
+	app.feedBuffer("devbox", "h2\nh3\nh4\nh5\nh6\nh7\nh8")
+
+	require.NoError(t, app.layout(app.g))
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.NotContains(t, v.Title, "Hit Enter", "the stale verdict must not reappear once history is available")
+}

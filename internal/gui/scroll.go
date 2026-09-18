@@ -405,6 +405,17 @@ func (a *App) settlePaneLocked(name, fetchRecorded, paneID string) bool {
 	return true
 }
 
+// bufferHasHistory reports whether the session's synthetic buffer holds
+// lines beyond its current screen.
+func (a *App) bufferHasHistory(name string) bool {
+	b := a.bufferLookup(name)
+	if b == nil {
+		return false
+	}
+	snap, h := b.SnapshotWithHeight()
+	return len(snap) > h
+}
+
 // paneMatches reports whether the pane a scrollback capture came from is the
 // one the session's buffer belongs to. An unrecorded pane (no live capture
 // yet, or an old tmux) cannot conflict and passes.
@@ -497,10 +508,8 @@ func (a *App) enterPreviewScroll() {
 		a.scrollHintIdent == sessionIdentity(*sess) && a.scrollHintPane == hintPane &&
 		time.Now().Before(a.scrollHintUntil)
 	if skip {
-		if b := a.bufferLookup(sess.Name); b != nil {
-			if snap, h := b.SnapshotWithHeight(); len(snap) > h {
-				skip = false // the buffer gained history: browse it
-			}
+		if a.bufferHasHistory(sess.Name) {
+			skip = false // the buffer gained history: browse it
 		}
 	}
 	if skip {
