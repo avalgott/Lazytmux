@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jesseduffield/gocui"
 
@@ -423,18 +424,35 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 		if !hasPos {
 			return
 		}
-		// The tmux round-trips run off the event loop through an ordered
-		// worker: each can block for the client timeout, and queued wheel
-		// input must neither freeze the UI nor be reordered.
-		a.enqueueWheelTask(wheelTask{
-			target:  a.fullscreen.Target(),
-			fsGen:   a.fullscreenGen.Load(),
-			wGen:    a.wheelGen.Load(),
-			exitGen: a.wheelExitGen.Load(),
-			sGen:    a.sessionGen.Load(),
-			uGen:    a.userScrollGen.Load(),
-			delta:   delta, x: x, y: y, hasPos: hasPos,
-		})
+		// The wheel decision and the forward run synchronously on the event
+		// loop using the cached pane mode — keyboard input forwarded
+		// afterwards cannot overtake the wheel, and the per-wheel blocking
+		// lookup is gone.
+		target := a.fullscreen.Target()
+		a.modeMu.Lock()
+		fresh := a.modeTarget == target && time.Since(a.modeAt) < 2*refreshInterval
+		alt, sgr := a.modeAlt, a.modeSgr
+		cx, cy := a.modeX, a.modeY
+		pane := a.modePane
+		a.modeMu.Unlock()
+		if fresh && alt && sgr {
+			a.buffersMu.Lock()
+			recorded := a.paneIDs[target]
+			a.buffersMu.Unlock()
+			if recorded == "" || recorded == pane {
+				if ferr := a.svc.ForwardMouseWheel(context.Background(), target, delta < 0, cx, cy); ferr == nil {
+					return
+				}
+			}
+		}
+		// Wheel-down at the live bottom has nothing to browse; entering
+		// would start a whole-history load that pins at the bottom.
+		if delta > 0 {
+			return
+		}
+		a.enterScrollMode()
+		a.scroll.Move(delta)
+		a.g.Update(func(*gocui.Gui) error { return nil })
 		return
 	}
 	// Dashboard: the wheel scrolls the preview panel.

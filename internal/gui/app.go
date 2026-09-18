@@ -77,12 +77,18 @@ type App struct {
 	// tmux scrollback history (alternate-screen programs like Claude Code),
 	// so the status bar can say so and the wheel forwards to the pane.
 	fullscreenNoScrollback     bool
-	fullscreenNoScrollbackPane string         // the pane the verdict belongs to (a pane change hides it)
-	fullscreenIdent            string         // identity of the fullscreen target (a recreation must drop scroll mode)
-	fullscreenGen              atomic.Uint64  // bumped on enter/exit; async callbacks compare against it
-	wheelGen                   atomic.Uint64  // bumped on scroll-mode transitions; stale forwards compare against it
-	wheelExitGen               atomic.Uint64  // bumped on scroll-mode exit; stale fallbacks compare against it
-	userScrollGen              atomic.Uint64  // bumped when the USER enters scroll mode; queued wheel events compare against it
+	fullscreenNoScrollbackPane string        // the pane the verdict belongs to (a pane change hides it)
+	fullscreenIdent            string        // identity of the fullscreen target (a recreation must drop scroll mode)
+	fullscreenGen              atomic.Uint64 // bumped on enter/exit; async callbacks compare against it
+	wheelGen                   atomic.Uint64 // bumped on scroll-mode transitions; stale forwards compare against it
+	wheelExitGen               atomic.Uint64 // bumped on scroll-mode exit; stale fallbacks compare against it
+	userScrollGen              atomic.Uint64 // bumped when the USER enters scroll mode; queued wheel events compare against it
+	modeMu                     sync.Mutex    // guards the cached pane input mode below
+	modeTarget                 string
+	modeAlt, modeSgr           bool
+	modeX, modeY               int
+	modePane                   string
+	modeAt                     time.Time      // when the cached mode was refreshed
 	wheelQueue                 chan wheelTask // ordered queue of wheel events (worker-owned)
 	fsMu                       sync.Mutex     // serializes wheel injection with fullscreen transitions
 	lastResizeW                int            // and the size it was resized to
@@ -263,6 +269,31 @@ func (a *App) AttachTarget() string {
 // Gui returns the underlying gocui.Gui (for testing).
 func (a *App) Gui() *gocui.Gui {
 	return a.g
+}
+
+// refreshPaneMode refreshes the cached pane input mode for the current
+// fullscreen target, off the event loop. The wheel uses this cache instead
+// of a per-event blocking lookup, so forwarded input stays in one ordered
+// stream with keyboard input.
+func (a *App) refreshPaneMode() {
+	if !a.fullscreen.IsActive() {
+		return
+	}
+	target := a.fullscreen.Target()
+	if target == "" {
+		return
+	}
+	go func() {
+		alt, sgr, cx, cy, pane, err := a.svc.PaneInputFlags(context.Background(), target)
+		if err != nil {
+			return
+		}
+		a.modeMu.Lock()
+		a.modeTarget, a.modeAlt, a.modeSgr = target, alt, sgr
+		a.modeX, a.modeY, a.modePane = cx, cy, pane
+		a.modeAt = time.Now()
+		a.modeMu.Unlock()
+	}()
 }
 
 // refreshSessionsAsync fetches the session list in a background goroutine and

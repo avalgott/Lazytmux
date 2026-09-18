@@ -2999,3 +2999,26 @@ func TestTitleHintHiddenOnPaneChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, v.Title, "Hit Enter", "the replacement pane must not inherit the old pane's verdict")
 }
+
+// --- Copilot round-47 fix ---
+
+func TestWheelForwardsSynchronouslyViaCachedMode(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5"}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	// The mode cache refreshes off the event loop (the ticker's job); the
+	// wheel then forwards synchronously — no worker queue involved.
+	app.refreshPaneMode()
+	require.Eventually(t, func() bool {
+		app.modeMu.Lock()
+		defer app.modeMu.Unlock()
+		return app.modeTarget == "devbox" && time.Since(app.modeAt) < time.Minute
+	}, time.Second, 10*time.Millisecond)
+
+	app.wheelHandlerAt(-3, 12, 7)
+	require.Len(t, p.wheelSnapshot(), 1, "the wheel must forward immediately and synchronously")
+	assert.Equal(t, wheelCall{name: "devbox", up: true, x: 12, y: 7}, p.wheelSnapshot()[0])
+}
