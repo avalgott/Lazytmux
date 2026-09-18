@@ -116,9 +116,12 @@ func (b *LineBuffer) update(scr []string) []string {
 		if majorityEqual(added, tail[len(tail)-d:]) {
 			return capLines(b.lines, b.cap)
 		}
-		k := 0
-		for k < len(added) && k < len(b.lines) && added[len(added)-1-k] == b.lines[k] {
-			k++
+		k := len(added)
+		if k > len(b.lines) {
+			k = len(b.lines)
+		}
+		for k > 0 && !slices.Equal(added[len(added)-k:], b.lines[:k]) {
+			k--
 		}
 		if missing := added[:len(added)-k]; len(missing) > 0 {
 			return capLines(append(append([]string(nil), missing...), b.lines...), b.cap)
