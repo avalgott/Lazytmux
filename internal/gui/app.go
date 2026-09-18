@@ -403,8 +403,10 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 			delete(a.paneSeq, name)
 		}
 	}
-	// Record every live session's identity, so feeds can bind themselves to
-	// it (the capture goroutine cannot read the session list).
+	// Rebuild the identity map from THIS refresh: historical names must not
+	// accumulate forever. The pane-change checks above already consumed the
+	// previous values, and feeds bind themselves to the current ones.
+	a.sessionIdentities = make(map[string]string, len(a.sessions))
 	for _, s := range a.sessions {
 		a.sessionIdentities[s.Name] = sessionIdentity(s)
 	}
