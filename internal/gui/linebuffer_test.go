@@ -329,3 +329,13 @@ func TestLineBufferBlankScreenKeepsHistory(t *testing.T) {
 	assert.Equal(t, []string{"L01", "L02", "L03", "L04"}, b.Snapshot(),
 		"all-blank screens must not erase retained history")
 }
+
+func TestLineBufferRepeatedLineReverseScroll(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("A", "X", "B", "C", "D"))
+	// A valid one-row reverse shift whose revealed row repeats existing
+	// text: the new X is a DISTINCT row and must be retained.
+	b.Feed(screen("X", "A", "X", "B", "C"))
+	assert.Equal(t, []string{"X", "A", "X", "B", "C", "D"}, b.Snapshot(),
+		"a repeated line revealed by reverse scrolling is a distinct row")
+}

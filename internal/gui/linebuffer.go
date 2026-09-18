@@ -103,22 +103,24 @@ func (b *LineBuffer) update(scr []string) []string {
 		}
 	}
 	// Scroll-down: prefix of tail matches suffix of scr. Reverse scrolling
-	// re-reveals lines the buffer already holds — only genuinely new older
-	// content may be prepended. Consecutive reverse steps reveal one new
-	// row at a time, so the not-fresh block is NOT discarded wholesale:
-	// merge only the lines the buffer is actually missing.
+	// re-reveals lines the buffer already holds. Repeated text is NOT a
+	// global identity: the revealed block is reconciled positionally
+	// against the buffer's head (a consecutive reverse step's overlap), and
+	// a rotation — where the revealed block replays the rows it dropped
+	// from the tail — keeps the buffer unchanged.
 	if d, ok := shiftDown(tail, scr); ok && d > 0 {
 		added := scr[:d]
 		if majorityFresh(added, b.lines) {
 			return capLines(append(append([]string(nil), added...), b.lines...), b.cap)
 		}
-		missing := make([]string, 0, d)
-		for _, l := range added {
-			if !slices.Contains(b.lines, l) {
-				missing = append(missing, l)
-			}
+		if majorityEqual(added, tail[len(tail)-d:]) {
+			return capLines(b.lines, b.cap)
 		}
-		if len(missing) > 0 {
+		k := 0
+		for k < len(added) && k < len(b.lines) && added[len(added)-1-k] == b.lines[k] {
+			k++
+		}
+		if missing := added[:len(added)-k]; len(missing) > 0 {
 			return capLines(append(append([]string(nil), missing...), b.lines...), b.cap)
 		}
 		return capLines(b.lines, b.cap)
