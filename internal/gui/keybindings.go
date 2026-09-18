@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jesseduffield/gocui"
 
@@ -390,6 +391,10 @@ func (a *App) wheelHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 	}
 }
 
+// wheelTmuxTimeout bounds the wheel path's tmux round-trips: a slow or
+// wedged server must not freeze the whole interface per wheel notch.
+const wheelTmuxTimeout = 250 * time.Millisecond
+
 // wheelHandlerAt handles a view-scoped wheel event: the coordinates are the
 // actual mouse position (content-relative), which SGR consumers use to pick
 // the hovered widget — pane cursor coordinates would target the wrong one.
@@ -414,8 +419,11 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 				// since the last observation (e.g. vim exited), and raw SGR
 				// bytes must never reach a program that cannot parse them.
 				// One tmux call per wheel — the same cost as any forwarded
-				// key, and inherently ordered with keyboard input.
-				alt, sgr, cx, cy, pane, ferr := a.svc.PaneInputFlags(context.Background(), target)
+				// key, and inherently ordered with keyboard input. The calls
+				// carry a short timeout so a wedged tmux cannot freeze the
+				// interface for the full client timeout on every wheel.
+				ctx, cancel := context.WithTimeout(context.Background(), wheelTmuxTimeout)
+				alt, sgr, cx, cy, pane, ferr := a.svc.PaneInputFlags(ctx, target)
 				if ferr == nil && alt && sgr {
 					a.buffersMu.Lock()
 					recorded := a.paneIDs[target]
@@ -426,11 +434,12 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 						if pane != "" {
 							sendTarget = pane
 						}
-						if werr := a.svc.ForwardMouseWheel(context.Background(), sendTarget, delta < 0, cx, cy); werr == nil {
+						if werr := a.svc.ForwardMouseWheel(ctx, sendTarget, delta < 0, cx, cy); werr == nil {
 							forwarded = true
 						}
 					}
 				}
+				cancel()
 			}
 			a.fsMu.Unlock()
 			if forwarded {

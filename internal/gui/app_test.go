@@ -105,17 +105,25 @@ func (f *fakeProvider) CaptureScrollback(_ context.Context, _ string) (session.P
 	return session.Preview{Content: sb.String(), PaneHeight: f.paneHeight, PaneID: f.scrollbackPaneID}, f.err
 }
 
-func (f *fakeProvider) PaneInputFlags(_ context.Context, _ string) (bool, bool, int, int, string, error) {
+func (f *fakeProvider) PaneInputFlags(ctx context.Context, _ string) (bool, bool, int, int, string, error) {
 	f.mu.Lock()
 	f.flagsCalls++
 	if len(f.flagsGates) > 0 {
 		gate := f.flagsGates[0]
 		f.flagsGates = f.flagsGates[1:]
 		f.mu.Unlock()
-		<-gate
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return false, false, 0, 0, "", ctx.Err()
+		}
 	} else if f.flagsGate != nil {
 		f.mu.Unlock()
-		<-f.flagsGate
+		select {
+		case <-f.flagsGate:
+		case <-ctx.Done():
+			return false, false, 0, 0, "", ctx.Err()
+		}
 	} else {
 		f.mu.Unlock()
 	}
@@ -2588,4 +2596,21 @@ func TestWheelForwardFailureFallsBackToScrollMode(t *testing.T) {
 	app.wheelHandlerAt(-3, 5, 5)
 	assert.True(t, app.scroll.IsActive(), "a failed wheel injection must fall back to lazytmux scroll mode")
 	assert.Equal(t, 3, app.scroll.offsetFromBottom, "the upward wheel still scrolls the snapshot")
+}
+
+// --- Copilot round-67 fix ---
+
+func TestWheelPathDoesNotBlockOnSlowTmux(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%5", flagsGate: make(chan struct{})}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+
+	start := time.Now()
+	app.wheelHandlerAt(-3, 5, 5)
+	elapsed := time.Since(start)
+	assert.True(t, app.scroll.IsActive(), "a timed-out query falls back to scroll mode")
+	assert.Less(t, elapsed, time.Second, "the wheel path must not block for the full client timeout")
+	close(p.flagsGate)
 }
