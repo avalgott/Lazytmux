@@ -237,6 +237,11 @@ func (a *App) finishScrollLoadFor(apply func(seq int64, sGen uint64, paneID, fet
 // have no saved history at all) leaves scroll mode too, with the
 // no-scrollback hint.
 func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID, fetchRecorded string, lines []string, paneH int, loadErr error) {
+	// A superseded load must not touch pane metadata at all — the mode was
+	// exited and possibly re-entered for another target.
+	if a.scroll.seq != seq {
+		return
+	}
 	// A session recreated under the same name while the capture was in
 	// flight must not receive the old pane's snapshot. When the rejection
 	// hits the latest load, restart it under the current generation — the
@@ -587,6 +592,16 @@ func (a *App) applyPreviewScrollLoad(seq int64, sGen uint64, paneID, fetchRecord
 // flight (the verdict belongs to the snapshot's pane, not the replacement).
 func (a *App) applyNoHistory(name string, seq int64, alt, sgr bool, qPane, paneID string, flagErr bool) {
 	if !a.noHistoryHintCurrent(name, seq) {
+		return
+	}
+	// The pane may have changed since the query returned (or the query may
+	// have failed with an empty pane): recheck the recorded binding before
+	// the verdict installs, so it never lands against the replacement pane.
+	a.buffersMu.Lock()
+	recorded := a.paneIDs[name]
+	a.buffersMu.Unlock()
+	if recorded != "" && paneID != "" && recorded != paneID {
+		a.restartPreviewScrollLoad()
 		return
 	}
 	if qPane != "" && paneID != "" && qPane != paneID {

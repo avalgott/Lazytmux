@@ -2919,3 +2919,39 @@ func TestAdoptPaneReservesCaptureSequence(t *testing.T) {
 	app.buffersMu.Unlock()
 	assert.Equal(t, "%2", recorded, "an in-flight capture predating the adoption must not rebind the session")
 }
+
+// --- Copilot round-44 fixes ---
+
+func TestFullscreenStaleSeqSkipsPaneAdoption(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}, {Name: "other", ID: "$2", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	app.scroll.Enter(20, 80)
+	oldSeq := app.scroll.seq
+	app.exitFullScreen()
+	app.fullscreen.Enter("other")
+
+	app.applyScrollLoad(oldSeq, app.sessionGen.Load(), "%9", "%1", make([]string, 25), 5, nil)
+	app.buffersMu.Lock()
+	_, recorded := app.paneIDs["other"]
+	app.buffersMu.Unlock()
+	assert.False(t, recorded, "a stale load must not bind its pane to the new target")
+}
+
+func TestNoHistoryRechecksPaneAtApply(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.renderPreviewCapture("devbox", 0, app.sessionGen.Load(), app.captureSeq.Add(1), session.Preview{Content: "P", Full: "P", PaneID: "%1"}, nil)
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(20, 78)
+	seq := app.previewScroll.seq
+
+	// A live capture rebinds the pane after the snapshot fetch.
+	app.buffersMu.Lock()
+	app.paneIDs["devbox"] = "%2"
+	app.paneSeq["devbox"] = app.captureSeq.Add(1)
+	app.buffersMu.Unlock()
+
+	app.applyNoHistory("devbox", seq, false, false, "%1", "%1", false)
+	assert.Equal(t, "", app.scrollHintName, "the stale pane's verdict must not install against the replacement")
+}
