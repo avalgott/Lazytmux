@@ -12,7 +12,7 @@ and fullscreen mode shows what each planned session is supposed to be running.
 
 ### Added
 
-- **Session Plans**: YAML plans under `~/.config/lazytmux/plans/` declare the named
+- **Session Plans**: YAML plans under `lazytmux/plans/` in the user config directory declare the named
   sessions of a development workflow. Plans are strictly validated before anything
   is created (schema, session names, paths must exist, plan `name` must match the
   requested one).

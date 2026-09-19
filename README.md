@@ -84,7 +84,7 @@ A Session Plan is a small YAML file that declares the tmux sessions of a develop
 lazytmux --plan myapp     # or: lazytmux -p myapp
 ```
 
-The plan lives at `<config-dir>/lazytmux/plans/myapp.yaml`, where `<config-dir>` is `~/.config` by default or `$XDG_CONFIG_HOME` when that variable is set:
+The plan lives at `<config-dir>/lazytmux/plans/myapp.yaml`, where `<config-dir>` is the user config directory: `$XDG_CONFIG_HOME` when set, otherwise `~/.config` on Linux and `~/Library/Application Support` on macOS:
 
 ```yaml
 version: 1
