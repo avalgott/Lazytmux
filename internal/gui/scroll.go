@@ -275,6 +275,14 @@ func (a *App) applyScrollLoad(seq int64, sGen uint64, paneID, fetchRecorded stri
 		return // superseded or the mode already exited — leave the hint alone
 	}
 	if noHistory {
+		// The capture pipeline keeps feeding the synthetic buffer while the
+		// load was in flight: if the pane produced output in between, the
+		// buffer may already be browsable — restart the load instead of
+		// reporting a verdict that just went stale.
+		if a.bufferHasHistory(a.fullscreen.Target()) {
+			a.restartScrollLoad()
+			return
+		}
 		a.fullscreenNoScrollback = true
 		// The verdict belongs to the pane THIS snapshot came from — reading
 		// paneIDs after the fsMu section could race a rebind and associate
@@ -637,6 +645,14 @@ func (a *App) applyNoHistory(name string, seq int64, alt, sgr bool, qPane, paneI
 	if qPane != "" && paneID != "" && qPane != paneID {
 		// The active pane changed while the query ran: the verdict must not
 		// suppress the replacement pane's browsing.
+		a.restartPreviewScrollLoad()
+		return
+	}
+	// The capture pipeline keeps feeding the synthetic buffer while the
+	// flags query ran: if the buffer became browsable in the meantime, the
+	// verdict is already stale — restart the load instead of suppressing
+	// browsing.
+	if a.bufferHasHistory(name) {
 		a.restartPreviewScrollLoad()
 		return
 	}

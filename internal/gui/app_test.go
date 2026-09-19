@@ -2288,6 +2288,41 @@ func TestScrollHintSkippedOnlyWhileBufferEmpty(t *testing.T) {
 	assert.Equal(t, "", app.scrollHintMsg)
 }
 
+func TestFullscreenNoHistoryVerdictRestartsWhenBufferGainedHistory(t *testing.T) {
+	p := &fakeProvider{paneHeight: 1}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+	app.fullscreen.Enter("devbox")
+	app.scroll.Enter(10, 78)
+	// The buffer gained history while the scroll load was in flight.
+	app.feedBuffer("devbox", "h1\nh2\nh3\nh4")
+	app.feedBuffer("devbox", "h2\nh3\nh4\nh5")
+
+	seq := app.scroll.seq
+	app.applyScrollLoad(seq, app.sessionGen.Load(), "%1", "%1", []string{"L1"}, 1, nil)
+	assert.True(t, app.scroll.IsActive(), "a verdict that went stale must restart the load, not exit scroll mode")
+	assert.Greater(t, app.scroll.seq, seq, "the load restarts to pick up the new history")
+	assert.False(t, app.fullscreenNoScrollback, "the stale no-scrollback verdict must not install")
+}
+
+func TestPreviewNoHistoryVerdictRestartsWhenBufferGainedHistory(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.cursor = 0
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	// The buffer gained history while the flags query was in flight.
+	app.feedBuffer("devbox", "h1\nh2\nh3\nh4")
+	app.feedBuffer("devbox", "h2\nh3\nh4\nh5")
+
+	seq := app.previewScroll.seq
+	app.applyNoHistory("devbox", seq, false, false, "%1", "%1", false)
+	assert.True(t, app.previewScroll.IsActive(), "the stale verdict must restart the load, not exit browsing")
+	assert.Greater(t, app.previewScroll.seq, seq, "the preview load restarts")
+	assert.True(t, app.scrollHintUntil.IsZero(), "the stale hint must not install")
+}
+
 // --- Copilot round-32 fixes: pane identity ---
 
 func TestBufferResetOnActivePaneChange(t *testing.T) {
