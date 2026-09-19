@@ -39,6 +39,8 @@ type fakeProvider struct {
 	wheels           []wheelCall     // recorded ForwardMouseWheel calls
 	wheelBlock       chan struct{}   // when set, ForwardMouseWheel blocks until closed
 	wheelStarted     chan struct{}   // when set, signaled when ForwardMouseWheel is entered
+	captureCalls     int             // Capture invocation count
+	captureGate      chan struct{}   // when set, Capture blocks until closed
 	flagsCalls       int             // PaneInputFlags invocation count
 	flagsGate        chan struct{}   // when set, PaneInputFlags blocks until closed
 	flagsGates       []chan struct{} // when set, each PaneInputFlags call waits on the next gate
@@ -88,7 +90,17 @@ func (f *fakeProvider) Rename(_ context.Context, from, to string) error {
 	return f.err
 }
 
-func (f *fakeProvider) Capture(_ context.Context, _ string, _, _ int) (session.Preview, error) {
+func (f *fakeProvider) Capture(ctx context.Context, _ string, _, _ int) (session.Preview, error) {
+	f.mu.Lock()
+	f.captureCalls++
+	gate := f.captureGate
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+		}
+	}
 	return f.captured, f.err
 }
 
@@ -283,6 +295,75 @@ func TestVersionPanelRendersVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, " Version ", v.Title)
 	assert.Contains(t, v.Buffer(), "0.2.0", "the installed version must be shown in the version panel")
+}
+
+func TestPreviewScrollKeepsCapturePipelineRunning(t *testing.T) {
+	p := &fakeProvider{captureGate: make(chan struct{})}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+	app.previewScrollTarget = "devbox"
+	app.previewScroll.Enter(10, 78)
+	app.previewScroll.lines = []string{"frozen"}
+	app.previewScroll.total = 1
+	app.previewScroll.loaded = true
+	// Seed the stored dimensions so the first layout is not seen as a
+	// resize (which would exit the scroll state).
+	app.lastWidth = 120
+	app.lastHeight = 40
+
+	require.NoError(t, app.layout(app.g))
+	waitCaptureStarted(t, p)
+	app.preview.Lock()
+	busy := app.preview.Busy()
+	app.preview.Unlock()
+	assert.True(t, busy, "browsing must not stop the live capture pipeline")
+	close(p.captureGate) // let the capture finish before the app closes
+
+	v, err := app.g.View("main")
+	require.NoError(t, err)
+	assert.Contains(t, v.Buffer(), "frozen", "the panel still shows the frozen snapshot")
+}
+
+func TestFullscreenScrollKeepsCapturePipelineRunning(t *testing.T) {
+	p := &fakeProvider{captureGate: make(chan struct{})}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	app.cursor = 0
+	app.fullscreen.Enter("devbox")
+	app.scroll.Enter(10, 78)
+	app.scroll.lines = []string{"frozen"}
+	app.scroll.total = 1
+	app.scroll.loaded = true
+	app.lastWidth = 120
+	app.lastHeight = 40
+
+	require.NoError(t, app.layout(app.g))
+	waitCaptureStarted(t, p)
+	app.preview.Lock()
+	busy := app.preview.Busy()
+	app.preview.Unlock()
+	assert.True(t, busy, "fullscreen scrolling must not stop the live capture pipeline")
+	close(p.captureGate)
+}
+
+// waitCaptureStarted blocks until the fake's Capture has been entered, so
+// assertions about in-flight state are deterministic.
+func waitCaptureStarted(t *testing.T, p *fakeProvider) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		p.mu.Lock()
+		n := p.captureCalls
+		p.mu.Unlock()
+		if n > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Capture was never invoked")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func TestVersionViewRemovedOnShrinkToCompactLayout(t *testing.T) {

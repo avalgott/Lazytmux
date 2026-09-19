@@ -59,6 +59,8 @@ func (a *App) renderPreview(v *gocui.View) {
 		v.Title = " " + a.scrollHintMsg + " "
 	}
 
+	a.previewCaptureTick(v, sess)
+
 	previewW := v.InnerWidth()
 	previewH := v.InnerHeight()
 	if previewW < 1 {
@@ -66,14 +68,6 @@ func (a *App) renderPreview(v *gocui.View) {
 	}
 	if previewH < 1 {
 		previewH = 1
-	}
-
-	// Only fetch if: not busy, AND (cursor changed OR cache is stale).
-	// Fullscreen mode uses a tighter threshold so forwarded keystrokes are
-	// echoed quickly.
-	staleAfter := previewStaleAfter
-	if a.fullscreen.IsActive() {
-		staleAfter = fullscreenStaleAfter
 	}
 	a.preview.Lock()
 	cache := a.preview.Content()
@@ -83,25 +77,10 @@ func (a *App) renderPreview(v *gocui.View) {
 	cachedCursor := a.preview.Cursor()
 	paneCursorX := a.preview.CursorX()
 	paneCursorY := a.preview.CursorY()
+	a.preview.Unlock()
 	a.buffersMu.Lock()
 	recordedPane := a.paneIDs[sess.Name]
 	a.buffersMu.Unlock()
-	needFetch := !a.preview.Busy() && (cacheName != sess.Name || cachedCursor != a.cursor || a.preview.Stale(staleAfter) || cacheGen != a.sessionGen.Load() || (cachePane != "" && recordedPane != "" && cachePane != recordedPane))
-	if needFetch {
-		a.preview.SetBusy(true)
-	}
-	a.preview.Unlock()
-
-	if needFetch {
-		name := sess.Name
-		cursorSnapshot := a.cursor
-		gen := a.sessionGen.Load()
-		cs := a.captureSeq.Add(1)
-		go func() {
-			result, err := a.svc.Capture(context.Background(), name, previewW, previewH)
-			a.renderPreviewCapture(name, cursorSnapshot, gen, cs, result, err)
-		}()
-	}
 
 	if cache != "" && cacheName == sess.Name && cachedCursor == a.cursor && cacheGen == a.sessionGen.Load() &&
 		(cachePane == "" || recordedPane == "" || cachePane == recordedPane) {
@@ -116,6 +95,53 @@ func (a *App) renderPreview(v *gocui.View) {
 	if sess.Path != "" {
 		fmt.Fprintln(v, "")
 		fmt.Fprintf(v, "  %s\n", presentation.Dim+sess.Path+presentation.Reset)
+	}
+}
+
+// previewCaptureTick starts a fresh live capture when the cache needs one.
+// Split out of renderPreview so the frozen-snapshot renders can keep the
+// capture pipeline (and the synthetic-buffer feeds it drives) running while
+// the panel shows scrollback instead of the live screen — otherwise output
+// arriving during a long browse falls into the gap between captures and
+// never reaches the synthetic scrollback.
+func (a *App) previewCaptureTick(v *gocui.View, sess *session.Info) {
+	previewW := v.InnerWidth()
+	previewH := v.InnerHeight()
+	if previewW < 1 {
+		previewW = 1
+	}
+	if previewH < 1 {
+		previewH = 1
+	}
+	// Only fetch if: not busy, AND (cursor changed OR cache is stale).
+	// Fullscreen mode uses a tighter threshold so forwarded keystrokes are
+	// echoed quickly.
+	staleAfter := previewStaleAfter
+	if a.fullscreen.IsActive() {
+		staleAfter = fullscreenStaleAfter
+	}
+	a.buffersMu.Lock()
+	recordedPane := a.paneIDs[sess.Name]
+	a.buffersMu.Unlock()
+	a.preview.Lock()
+	cacheName := a.preview.Name()
+	cacheGen := a.preview.Gen()
+	cachePane := a.preview.PaneID()
+	cachedCursor := a.preview.Cursor()
+	needFetch := !a.preview.Busy() && (cacheName != sess.Name || cachedCursor != a.cursor || a.preview.Stale(staleAfter) || cacheGen != a.sessionGen.Load() || (cachePane != "" && recordedPane != "" && cachePane != recordedPane))
+	if needFetch {
+		a.preview.SetBusy(true)
+	}
+	a.preview.Unlock()
+	if needFetch {
+		name := sess.Name
+		cursorSnapshot := a.cursor
+		gen := a.sessionGen.Load()
+		cs := a.captureSeq.Add(1)
+		go func() {
+			result, err := a.svc.Capture(context.Background(), name, previewW, previewH)
+			a.renderPreviewCapture(name, cursorSnapshot, gen, cs, result, err)
+		}()
 	}
 }
 

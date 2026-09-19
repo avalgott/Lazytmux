@@ -237,6 +237,12 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	v3.Editable = false
 	v3.Clear()
 	if a.previewScroll.IsActive() {
+		// Browsing must not stop observing the pane: the capture tick keeps
+		// live captures (and the synthetic-buffer feeds) running while the
+		// frozen snapshot is shown.
+		if sess := a.currentSession(); sess != nil {
+			a.previewCaptureTick(v3, sess)
+		}
 		a.renderPreviewScroll(v3)
 	} else {
 		a.renderPreview(v3)
@@ -289,6 +295,11 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	v.Clear()
 	a.resizeFullScreenTarget(v)
 	if a.scroll.IsActive() {
+		// Same as the dashboard preview: keep live captures (and the
+		// synthetic buffer) fed while the scroll snapshot is shown.
+		if sess := a.currentSession(); sess != nil {
+			a.previewCaptureTick(v, sess)
+		}
 		a.renderScrollContent(v)
 	} else {
 		a.renderPreview(v)
