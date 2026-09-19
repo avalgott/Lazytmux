@@ -75,18 +75,29 @@ func ComputeLayout(width, height int) Layout {
 	logsY0 := sessY1 + 1
 	// The version strip is exactly three rows — top border (with the
 	// title), the version content, bottom border — pinned to the bottom of
-	// the left column, right above the options bar.
-	logsY1 := maxY - 5
+	// the left column, right above the options bar. On short terminals the
+	// strip is omitted entirely (a zero rect), so the session list and the
+	// logs keep usable inner rows instead.
+	showVersion := maxY >= 12
+	logsY1 := maxY - 2
+	if showVersion {
+		logsY1 = maxY - 5
+	}
 	// Keep the logs panel usable on very short terminals.
 	if logsY0 > logsY1-2 {
 		logsY0 = logsY1 - 2
 		sessY1 = logsY0 - 1
 	}
 
+	var version Rect
+	if showVersion {
+		version = Rect{X0: 0, Y0: maxY - 4, X1: splitX - 1, Y1: maxY - 2}
+	}
+
 	return Layout{
 		Sessions: Rect{X0: 0, Y0: 0, X1: splitX - 1, Y1: sessY1},
 		Logs:     Rect{X0: 0, Y0: logsY0, X1: splitX - 1, Y1: logsY1},
-		Version:  Rect{X0: 0, Y0: maxY - 4, X1: splitX - 1, Y1: maxY - 2},
+		Version:  version,
 		Main:     Rect{X0: splitX, Y0: 0, X1: maxX - 1, Y1: maxY - 2},
 		Options:  Rect{X0: 0, Y0: maxY - 2, X1: maxX - 1, Y1: maxY},
 	}
@@ -199,14 +210,17 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	renderLogs(vlog, a.logs)
 
 	// Version strip (bottom of the left column): the installed app version.
-	vver, err := g.SetView("version", l.Version.X0, l.Version.Y0, l.Version.X1, l.Version.Y1, 0)
-	if err != nil && !isUnknownView(err) {
-		return err
+	// Skipped on short terminals, where the strip is a zero rect.
+	if l.Version.Y1 > l.Version.Y0 {
+		vver, err := g.SetView("version", l.Version.X0, l.Version.Y0, l.Version.X1, l.Version.Y1, 0)
+		if err != nil && !isUnknownView(err) {
+			return err
+		}
+		setRoundedFrame(vver)
+		vver.Title = " Version "
+		vver.Clear()
+		fmt.Fprintf(vver, " %s", a.version)
 	}
-	setRoundedFrame(vver)
-	vver.Title = " Version "
-	vver.Clear()
-	fmt.Fprintf(vver, " %s", a.version)
 
 	// Main panel (right side) — live preview of the selected session
 	v3, err := g.SetView("main", l.Main.X0, l.Main.Y0, l.Main.X1, l.Main.Y1, 0)

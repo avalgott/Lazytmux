@@ -506,8 +506,8 @@ func parseInputFlags(s string) (altOn, mouseSGR bool, cx, cy int, paneID string,
 // sgrWheel builds the SGR mouse escape sequence for one wheel step. Wheel
 // motion is reported as single impulses — unlike button presses there is no
 // release event, so appending one would inject a spurious second event.
-// Coordinates are converted from tmux's 0-based pane cursor to SGR's
-// 1-based scheme, clamped to at least 1.
+// Coordinates are converted from 0-based pane-relative mouse coordinates
+// to SGR's 1-based scheme, clamped to at least 1.
 func sgrWheel(up bool, x, y int) string {
 	b := 64
 	if !up {

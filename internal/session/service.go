@@ -70,7 +70,9 @@ type Provider interface {
 	// mode — SGR is the only wheel encoding it emits.
 	PaneInputFlags(ctx context.Context, name string) (altOn, sgrMouse bool, cursorX, cursorY int, paneID string, err error)
 	// ForwardMouseWheel sends a mouse wheel event to the pane's input
-	// stream (0-based pane cursor coordinates).
+	// stream at the given 0-based pane-relative mouse coordinates (not the
+	// pane's cursor position — SGR consumers pick the hovered widget from
+	// them).
 	ForwardMouseWheel(ctx context.Context, name string, up bool, cursorX, cursorY int) error
 	// SendKeys sends tmux key names (e.g. "Enter", "Up", "C-c") to the
 	// session's active pane. Used by fullscreen passthrough mode.

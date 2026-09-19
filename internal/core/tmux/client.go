@@ -68,7 +68,9 @@ type Client interface {
 	PaneInputFlags(ctx context.Context, target string) (altOn, mouseAny bool, cursorX, cursorY int, paneID string, err error)
 
 	// SendMouseWheel sends a mouse wheel event to the pane's input stream
-	// as SGR mouse escape sequences (0-based pane cursor coordinates).
+	// as SGR mouse escape sequences. x and y are the 0-based pane-relative
+	// mouse coordinates of the event, not the pane's cursor position — SGR
+	// consumers pick the hovered widget from them.
 	SendMouseWheel(ctx context.Context, target string, up bool, x, y int) error
 
 	// SendKeys sends key sequences to a tmux target.

@@ -285,6 +285,20 @@ func TestVersionPanelRendersVersion(t *testing.T) {
 	assert.Contains(t, v.Buffer(), "0.2.0", "the installed version must be shown in the version panel")
 }
 
+func TestVersionPanelOmittedOnShortTerminals(t *testing.T) {
+	app, err := NewAppHeadless(&fakeProvider{}, 40, 9)
+	require.NoError(t, err)
+	t.Cleanup(func() { app.g.Close() })
+	app.sessions = []session.Info{{Name: "devbox"}}
+	require.NoError(t, app.layout(app.g))
+
+	_, err = app.g.View("version")
+	assert.Error(t, err, "the version strip must be omitted when the terminal is too short")
+	v, err := app.g.View("sessions")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, v.InnerHeight(), 1, "the session list must keep a usable inner row")
+}
+
 func TestVersionPanelRemovedInFullscreen(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	require.NoError(t, app.layout(app.g))
