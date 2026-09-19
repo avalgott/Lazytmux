@@ -313,6 +313,25 @@ func displayVersion(v string) string {
 	return v
 }
 
+// describeTail matches the suffix git describe appends to a tag: the full
+// "-<count>-g<abbrev>[-dirty]" shape or the bare "-dirty" of a dirty
+// checkout exactly at a tagged commit.
+var describeTail = regexp.MustCompile(`-([0-9]+-g[0-9a-f]+(-dirty)?|dirty)$`)
+
+// ReleaseVersion renders the embedded version for display: git describe
+// suffixes are stripped so the panel shows the release the build is based
+// on (v0.2.0, not v0.2.0-119-gb704522-dirty), while real prerelease
+// markers survive. "dev" and empty inputs stay "dev".
+func ReleaseVersion(v string) string {
+	if s := strings.TrimSpace(v); s != "" && s != "dev" {
+		if loc := describeTail.FindStringIndex(s); loc != nil {
+			return s[:loc[0]]
+		}
+		return s
+	}
+	return "dev"
+}
+
 // getWithUserAgent performs a GET with an explicit product User-Agent;
 // GitHub's API rejects requests without one.
 func getWithUserAgent(client *http.Client, url string) (*http.Response, error) {

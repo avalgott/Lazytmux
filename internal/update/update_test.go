@@ -255,3 +255,23 @@ func TestRunFlow(t *testing.T) {
 		assertNoLeftovers(t, dir)
 	})
 }
+
+func TestReleaseVersion(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"v0.2.0", "v0.2.0"},
+		{"0.2.0", "0.2.0"},
+		{"v0.2.0-119-gb704522-dirty", "v0.2.0"},
+		{"v0.2.0-119-gb704522", "v0.2.0"},
+		{"v0.2.0-dirty", "v0.2.0"},
+		{"v0.2.0-beta", "v0.2.0-beta"},
+		{"v0.2.0-rc.1", "v0.2.0-rc.1"},
+		{"dev", "dev"},
+		{"", "dev"},
+		{"  v0.2.0  ", "v0.2.0"},
+	}
+	for _, tt := range tests {
+		if got := ReleaseVersion(tt.in); got != tt.want {
+			t.Errorf("ReleaseVersion(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
