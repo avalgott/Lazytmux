@@ -2150,6 +2150,8 @@ func TestScrollHintSkippedOnlyWhileBufferEmpty(t *testing.T) {
 	app.feedBuffer("devbox", "h2\nh3\nh4\nh5\nh6\nh7\nh8")
 	require.NoError(t, app.wheelHandler(-3)(app.g, nil))
 	assert.True(t, app.previewScroll.IsActive(), "history in the buffer must override the stale hint")
+	assert.True(t, app.scrollHintUntil.IsZero(), "the stale hint must expire when the buffer gains history")
+	assert.Equal(t, "", app.scrollHintMsg)
 }
 
 // --- Copilot round-32 fixes: pane identity ---

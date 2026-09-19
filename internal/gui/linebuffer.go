@@ -104,43 +104,52 @@ func (b *LineBuffer) update(scr []string) []string {
 	// Scroll-up: suffix of the previous screen matches the prefix of scr.
 	if d, ok := shiftUp(prevScreen, scr); ok && d > 0 {
 		added := scr[n-d:]
-		// Accept a shift when most added lines are novel; when they repeat
-		// recent output, still accept small blocks that do not replay the
-		// dropped lines (rotations replay them), and larger blocks unless
-		// they repaint the same screen region (a mid-screen edit masquerades
-		// as a large shift with an all-known bottom block).
-		if majorityFresh(added, b.lines) {
-			return capLines(append(b.lines, added...), b.cap)
-		}
-		// Small repeated blocks: a reverse-then-forward step re-reveals a
-		// row that scrolled off and is already retained — appending would
-		// duplicate it. A genuine new occurrence shows up as MORE copies of
-		// the text on screen than in the buffer's recent window.
-		if len(added) <= max(2, n/5) && !majorityEqual(added, prevScreen[:d]) {
-			last := added[len(added)-1]
-			scrCount := 0
-			for _, l := range scr {
-				if l == last {
-					scrCount++
-				}
-			}
-			window := b.lines
-			if len(window) > 2*n {
-				window = window[len(window)-2*n:]
-			}
-			bufCount := 0
-			for _, l := range window {
-				if l == last {
-					bufCount++
-				}
-			}
-			if scrCount > bufCount {
+		// A mostly-fresh tail behind less than half a screen of overlap is
+		// more likely a full redraw that happens to share a few rows than a
+		// scroll (a,b,c,d,e -> d,e,x,y,z): appending would retain the
+		// obsolete screen as fabricated history. Skip the acceptance checks
+		// so the replace path swaps the screen instead.
+		if !(majorityFresh(added, b.lines) && 2*(n-d) < n) {
+			// Accept a shift when most added lines are novel; when they
+			// repeat recent output, still accept small blocks that do not
+			// replay the dropped lines (rotations replay them), and larger
+			// blocks unless they repaint the same screen region (a
+			// mid-screen edit masquerades as a large shift with an
+			// all-known bottom block).
+			if majorityFresh(added, b.lines) {
 				return capLines(append(b.lines, added...), b.cap)
 			}
-			return capLines(b.lines, b.cap)
-		}
-		if !majorityEqual(added, prevScreen[:d]) && !majorityEqual(added, prevScreen[n-d:]) {
-			return capLines(append(b.lines, added...), b.cap)
+			// Small repeated blocks: a reverse-then-forward step re-reveals
+			// a row that scrolled off and is already retained — appending
+			// would duplicate it. A genuine new occurrence shows up as MORE
+			// copies of the text on screen than in the buffer's recent
+			// window.
+			if len(added) <= max(2, n/5) && !majorityEqual(added, prevScreen[:d]) {
+				last := added[len(added)-1]
+				scrCount := 0
+				for _, l := range scr {
+					if l == last {
+						scrCount++
+					}
+				}
+				window := b.lines
+				if len(window) > 2*n {
+					window = window[len(window)-2*n:]
+				}
+				bufCount := 0
+				for _, l := range window {
+					if l == last {
+						bufCount++
+					}
+				}
+				if scrCount > bufCount {
+					return capLines(append(b.lines, added...), b.cap)
+				}
+				return capLines(b.lines, b.cap)
+			}
+			if !majorityEqual(added, prevScreen[:d]) && !majorityEqual(added, prevScreen[n-d:]) {
+				return capLines(append(b.lines, added...), b.cap)
+			}
 		}
 	}
 	// Scroll-down: prefix of the previous screen matches the suffix of scr.
@@ -151,23 +160,29 @@ func (b *LineBuffer) update(scr []string) []string {
 	// it dropped from the tail — keeps the buffer unchanged.
 	if d, ok := shiftDown(prevScreen, scr); ok && d > 0 {
 		added := scr[:d]
-		if majorityFresh(added, b.lines) {
-			return capLines(append(append([]string(nil), added...), b.lines...), b.cap)
-		}
-		if majorityEqual(added, prevScreen[len(prevScreen)-d:]) {
+		// Same redraw guard as the scroll-up branch: mostly-fresh reveals
+		// behind a thin overlap are more likely a redraw whose tail shares
+		// the old screen's head — the replace path swaps the screen instead
+		// of prepending fabricated history.
+		if !(majorityFresh(added, b.lines) && 2*(n-d) < n) {
+			if majorityFresh(added, b.lines) {
+				return capLines(append(append([]string(nil), added...), b.lines...), b.cap)
+			}
+			if majorityEqual(added, prevScreen[len(prevScreen)-d:]) {
+				return capLines(b.lines, b.cap)
+			}
+			k := len(added)
+			if k > len(b.lines) {
+				k = len(b.lines)
+			}
+			for k > 0 && !slices.Equal(added[len(added)-k:], b.lines[:k]) {
+				k--
+			}
+			if missing := added[:len(added)-k]; len(missing) > 0 {
+				return capLines(append(append([]string(nil), missing...), b.lines...), b.cap)
+			}
 			return capLines(b.lines, b.cap)
 		}
-		k := len(added)
-		if k > len(b.lines) {
-			k = len(b.lines)
-		}
-		for k > 0 && !slices.Equal(added[len(added)-k:], b.lines[:k]) {
-			k--
-		}
-		if missing := added[:len(added)-k]; len(missing) > 0 {
-			return capLines(append(append([]string(nil), missing...), b.lines...), b.cap)
-		}
-		return capLines(b.lines, b.cap)
 	}
 	// In-place edit, full redraw, or a resized pane: replace the PREVIOUS
 	// screen region (its height, not the new one — a shrunk pane must not

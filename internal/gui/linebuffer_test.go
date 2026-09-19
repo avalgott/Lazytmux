@@ -370,6 +370,28 @@ func TestLineBufferHalfScreenJumpKeepsAllRows(t *testing.T) {
 	assert.Equal(t, want, b.Snapshot(), "a half-screen jump must retain the scrolled-off rows")
 }
 
+func TestLineBufferThinOverlapRedrawReplacesScreen(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b", "c", "d", "e"))
+	// A full redraw that happens to share two rows with the old screen's
+	// tail: a genuine scroll continues the same content stream, so a
+	// mostly-fresh block behind a thin overlap is a redraw — the old
+	// screen must be replaced, not retained as fabricated history.
+	b.Feed(screen("d", "e", "x", "y", "z"))
+	assert.Equal(t, []string{"d", "e", "x", "y", "z"}, b.Snapshot(),
+		"a thin-overlap redraw must replace the screen instead of fabricating history")
+}
+
+func TestLineBufferThinOverlapRedrawDoesNotPrepend(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b", "c", "d", "e"))
+	// The mirror image: a redraw whose tail shares the old screen's head
+	// must not be taken for a reverse scroll and prepended.
+	b.Feed(screen("x", "y", "z", "a", "b"))
+	assert.Equal(t, []string{"x", "y", "z", "a", "b"}, b.Snapshot(),
+		"a thin-overlap redraw must not prepend fabricated history")
+}
+
 func TestLineBufferBlankCaptureThenRedraw(t *testing.T) {
 	b := NewLineBuffer(100)
 	b.Feed(screen("L01", "L02", "L03"))

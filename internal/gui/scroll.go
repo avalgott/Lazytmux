@@ -512,6 +512,9 @@ func (a *App) enterPreviewScroll() {
 	if skip {
 		if a.bufferHasHistory(sess.Name) {
 			skip = false // the buffer gained history: browse it
+			// The hint is stale the moment browsing is possible — drop it
+			// so returning to the live view cannot resurface the verdict.
+			a.clearScrollHint()
 		}
 	}
 	if skip {
@@ -669,6 +672,17 @@ func (a *App) applyNoHistoryHint(name string, alt, sgr, flagErr bool) {
 	a.scrollHintUntil = time.Now().Add(scrollHintDuration)
 	a.setStatus(a.scrollHintMsg)
 	a.exitPreviewScroll()
+}
+
+// clearScrollHint drops the no-scrollback hint state. Event-loop only; the
+// fields are read unlocked at render time and written here or in
+// applyNoHistoryHint.
+func (a *App) clearScrollHint() {
+	a.scrollHintName = ""
+	a.scrollHintIdent = ""
+	a.scrollHintPane = ""
+	a.scrollHintMsg = ""
+	a.scrollHintUntil = time.Time{}
 }
 
 // scrollHintText is the friendly hint shown when a session has no scrollback
