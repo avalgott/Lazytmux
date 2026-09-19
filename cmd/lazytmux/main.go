@@ -25,10 +25,15 @@ var (
 	commit  = "none"
 )
 
+// planFlagHelp describes the -p/--plan flag. The plan path is resolved
+// through the user config directory (os.UserConfigDir), ~/.config unless
+// XDG_CONFIG_HOME is set, so the help does not pin a fixed path.
+var planFlagHelp = "session plan to load from the user config directory (lazytmux/plans/<name>.yaml)"
+
 func main() {
 	planName := ""
-	flag.StringVar(&planName, "p", "", "session plan to load (~/.config/lazytmux/plans/<name>.yaml)")
-	flag.StringVar(&planName, "plan", "", "session plan to load (same as -p)")
+	flag.StringVar(&planName, "p", "", planFlagHelp)
+	flag.StringVar(&planName, "plan", "", planFlagHelp+" (same as -p)")
 	flag.Parse()
 
 	// `lazytmux update` self-updates to the latest GitHub release instead of
