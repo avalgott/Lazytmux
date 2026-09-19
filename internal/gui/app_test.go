@@ -274,6 +274,29 @@ func TestLogsPanelRendersMessages(t *testing.T) {
 	assert.Contains(t, buf, ":", "entries should have timestamps")
 }
 
+func TestVersionPanelRendersVersion(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.version = "0.2.0"
+	require.NoError(t, app.layout(app.g))
+
+	v, err := app.g.View("version")
+	require.NoError(t, err)
+	assert.Equal(t, " Version ", v.Title)
+	assert.Contains(t, v.Buffer(), "0.2.0", "the installed version must be shown in the version panel")
+}
+
+func TestVersionPanelRemovedInFullscreen(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	require.NoError(t, app.layout(app.g))
+	_, err := app.g.View("version")
+	require.NoError(t, err)
+
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+	_, err = app.g.View("version")
+	assert.Error(t, err, "the dashboard version panel must not survive fullscreen mode")
+}
+
 func TestLogsCap(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	for i := 0; i < maxLogEntries+20; i++ {

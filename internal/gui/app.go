@@ -50,6 +50,7 @@ const fullscreenStaleAfter = 100 * time.Millisecond
 type App struct {
 	g          *gocui.Gui
 	svc        session.Provider
+	version    string // the installed app version, shown in the Version panel
 	sessions   []session.Info // cached session list, refreshed periodically
 	cursor     int            // selected session index
 	preview    *PreviewCache
@@ -117,9 +118,9 @@ type logEntry struct {
 // maxLogEntries caps the in-memory log.
 const maxLogEntries = 100
 
-// NewApp creates an App for the given session provider. Call Run() to start
-// the event loop.
-func NewApp(svc session.Provider) (*App, error) {
+// NewApp creates an App for the given session provider and installed
+// version. Call Run() to start the event loop.
+func NewApp(svc session.Provider, version string) (*App, error) {
 	g, err := gocui.NewGui(gocui.NewGuiOpts{
 		OutputMode:      gocui.OutputTrue,
 		SupportOverlaps: true,
@@ -127,7 +128,7 @@ func NewApp(svc session.Provider) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init gocui: %w", err)
 	}
-	return newApp(g, svc)
+	return newApp(g, svc, version)
 }
 
 // NewAppHeadless creates an App in headless mode for testing.
@@ -141,13 +142,14 @@ func NewAppHeadless(svc session.Provider, width, height int) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init gocui headless: %w", err)
 	}
-	return newApp(g, svc)
+	return newApp(g, svc, "")
 }
 
-func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
+func newApp(g *gocui.Gui, svc session.Provider, version string) (*App, error) {
 	app := &App{
 		g:                 g,
 		svc:               svc,
+		version:           version,
 		preview:           &PreviewCache{},
 		fullscreen:        &FullScreenState{},
 		scroll:            &ScrollState{},

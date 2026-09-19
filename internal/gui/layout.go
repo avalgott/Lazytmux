@@ -39,7 +39,8 @@ func (r Rect) Height() int {
 // Layout holds pre-computed view positions for the main screen.
 type Layout struct {
 	Sessions Rect // upper-left panel
-	Logs     Rect // lower-left panel (status/error messages)
+	Logs     Rect // middle-left panel (status/error messages)
+	Version  Rect // lower-left strip (installed app version)
 	Main     Rect // right panel (preview)
 	Options  Rect // bottom bar
 }
@@ -47,8 +48,9 @@ type Layout struct {
 // ComputeLayout calculates view positions for the given terminal size.
 // The split column logic mirrors lazyclaude's ComputeLayout: the left column
 // is a third of the terminal, clamped so both columns remain usable. The
-// left column stacks the sessions panel (upper two thirds) and the logs
-// panel (lower third), like lazyclaude's sessions/plugins/logs stack.
+// left column stacks the sessions panel (upper two thirds), the logs panel,
+// and a three-row version strip pinned above the options bar, like
+// lazyclaude's sessions/plugins/logs stack.
 //
 // gocui quirk: content is always drawn at (x0+1, y0+1) and the writable area
 // is Width-2 / Height-2, so every view needs 2 extra rows/cols. The options
@@ -71,15 +73,19 @@ func ComputeLayout(width, height int) Layout {
 	leftH := maxY - 2 // rows available to the left-column panels
 	sessY1 := (leftH * 2) / 3
 	logsY0 := sessY1 + 1
+	// The version strip needs one content row plus its frame: three rows
+	// pinned to the bottom of the left column, right above the options bar.
+	logsY1 := maxY - 6
 	// Keep the logs panel usable on very short terminals.
-	if logsY0 > maxY-5 {
-		logsY0 = maxY - 5
+	if logsY0 > logsY1-2 {
+		logsY0 = logsY1 - 2
 		sessY1 = logsY0 - 1
 	}
 
 	return Layout{
 		Sessions: Rect{X0: 0, Y0: 0, X1: splitX - 1, Y1: sessY1},
-		Logs:     Rect{X0: 0, Y0: logsY0, X1: splitX - 1, Y1: maxY - 2},
+		Logs:     Rect{X0: 0, Y0: logsY0, X1: splitX - 1, Y1: logsY1},
+		Version:  Rect{X0: 0, Y0: maxY - 5, X1: splitX - 1, Y1: maxY - 2},
 		Main:     Rect{X0: splitX, Y0: 0, X1: maxX - 1, Y1: maxY - 2},
 		Options:  Rect{X0: 0, Y0: maxY - 2, X1: maxX - 1, Y1: maxY},
 	}
@@ -191,6 +197,16 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	vlog.Clear()
 	renderLogs(vlog, a.logs)
 
+	// Version strip (bottom of the left column): the installed app version.
+	vver, err := g.SetView("version", l.Version.X0, l.Version.Y0, l.Version.X1, l.Version.Y1, 0)
+	if err != nil && !isUnknownView(err) {
+		return err
+	}
+	setRoundedFrame(vver)
+	vver.Title = " Version "
+	vver.Clear()
+	fmt.Fprintf(vver, " %s", a.version)
+
 	// Main panel (right side) — live preview of the selected session
 	v3, err := g.SetView("main", l.Main.X0, l.Main.Y0, l.Main.X1, l.Main.Y1, 0)
 	if err != nil && !isUnknownView(err) {
@@ -231,6 +247,7 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	// Remove split-panel views so only the fullscreen view remains.
 	g.DeleteView("sessions")
 	g.DeleteView("logs")
+	g.DeleteView("version")
 	g.DeleteView("options")
 
 	v, err := g.SetView("main", 0, 0, maxX-1, maxY-2, 0)
