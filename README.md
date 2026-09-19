@@ -90,7 +90,7 @@ lazytmux               # browse with j/k, Enter opens fullscreen, Ctrl+D returns
 
 ### Preview panel
 
-Press `Tab` to focus the preview panel (its frame turns cyan). While it has focus, `j`/`k`/`↑`/`↓` scroll line by line, `PgUp`/`PgDn` page by half a screen, `g` jumps to the oldest line, and `G` returns to the live view. The history is a frozen snapshot taken on the first scroll, so output produced while browsing does not shift the view. Moving to a different session, resizing the terminal, or entering fullscreen returns the preview to its live capture. Session actions (`n`, `d`, `r`, `Enter`, `a`, `q`) still work while the preview has focus.
+Press `Tab` to focus the preview panel (its frame turns cyan). While it has focus, `j`/`k`/`↑`/`↓` scroll line by line, `PgUp`/`PgDn` page by half a screen, `g` jumps to the oldest line, and `G` returns to the live view; the mouse wheel scrolls the preview the same way (anywhere on the dashboard). The history is a frozen snapshot taken on the first scroll, so output produced while browsing does not shift the view. Moving to a different session, resizing the terminal, or entering fullscreen returns the preview to its live capture. Session actions (`n`, `d`, `r`, `Enter`, `a`, `q`) still work while the preview has focus.
 
 ### Fullscreen mode
 
@@ -153,7 +153,7 @@ The gocui and tcell forks under `third_party/` are vendored (inherited from lazy
 - The preview shows the active pane of the active window of the selected session — one pane per session.
 - Fullscreen passthrough is capture-based: full-screen TUI apps (vim, htop) redraw with noticeable lag and some special key sequences can be lossy. Use `a` (real attach) for those.
 - With `a`, attaching from inside tmux takes over the terminal as a new tmux client (tmux has one client per tty), so your original session becomes detached. Detaching from the target returns you to the dashboard on the raw terminal — run `tmux attach` after quitting to get back into your original session.
-- Mouse support is limited to wheel scrolling in fullscreen; no config files, no persistence — deliberately out of scope for the MVP.
+- Mouse support is limited to wheel scrolling (the preview panel and fullscreen); no config files, no persistence — deliberately out of scope for the MVP.
 
 ## License
 
@@ -162,3 +162,17 @@ MIT — see [LICENSE](LICENSE).
 ### Acknowledgements
 
 lazytmux is adapted from [lazyclaude](https://github.com/any-context/lazyclaude) (MIT, © 2026 KEMSHlM) with all Claude Code-specific behavior stripped out. Thanks to the lazyclaude authors for the TUI structure, the vendored gocui/tcell forks, and the lazygit-inspired rendering.
+
+
+### Support
+
+If Lazytmux makes your terminal workflow a little smoother and you'd like to support my ongoing maintenance and updates for this fork, feel free to buy me a coffee! 
+
+<a href="https://buymeacoffee.com/avalgott">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png"
+       height="50"
+       alt="Buy Me A Coffee">
+</a>
+
+Bug reports, feature suggestions, and contributions are always highly appreciated.
+
