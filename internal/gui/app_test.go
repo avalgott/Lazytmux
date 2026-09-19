@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jesseduffield/gocui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -692,6 +693,56 @@ func TestWrapCommandLines(t *testing.T) {
 			if tt.check != nil {
 				tt.check(t, lines)
 			}
+		})
+	}
+}
+
+// TestCommandPanelLinesReservePaddingCell guards the command panel's wrap
+// width: every row is rendered with a one-cell leading padding, and a row
+// that fills the panel's inner width would otherwise be clipped at draw time
+// (Wrap=false drops the overflowing cell).
+func TestCommandPanelLinesReservePaddingCell(t *testing.T) {
+	tests := []struct {
+		name       string
+		cmd        string
+		innerWidth int
+		check      func(t *testing.T, lines []string)
+	}{
+		{
+			name:       "full-width row keeps its last cell",
+			cmd:        strings.Repeat("a", 117) + "Z",
+			innerWidth: 118,
+			check: func(t *testing.T, lines []string) {
+				assert.Equal(t, []string{" " + strings.Repeat("a", 117), " Z"}, lines)
+			},
+		},
+		{
+			name:       "exact multiple wraps without loss",
+			cmd:        strings.Repeat("a", 236),
+			innerWidth: 118,
+			check: func(t *testing.T, lines []string) {
+				assert.Len(t, lines, 3)
+				for _, l := range lines {
+					assert.LessOrEqual(t, ansi.StringWidth(l), 118, "padded rows must fit the inner width")
+				}
+				assert.Equal(t, 236, strings.Count(strings.Join(lines, "\n"), "a"))
+			},
+		},
+		{
+			name:       "ellipsis row keeps the ellipsis",
+			cmd:        strings.Repeat("a", 400),
+			innerWidth: 118,
+			check: func(t *testing.T, lines []string) {
+				assert.Len(t, lines, 3)
+				assert.True(t, strings.HasSuffix(lines[2], "…"), "the truncated row must keep its ellipsis")
+				assert.LessOrEqual(t, ansi.StringWidth(lines[2]), 118)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := commandPanelLines(tt.cmd, tt.innerWidth)
+			tt.check(t, lines)
 		})
 	}
 }

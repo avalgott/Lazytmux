@@ -286,6 +286,20 @@ func wrapCommandLines(cmd string, width int) []string {
 	return lines
 }
 
+// commandPanelLines wraps the configured command into the command panel's
+// display rows. innerWidth is the panel's inner width; every row is rendered
+// with a one-cell leading padding, so the wrap reserves that cell: a row
+// that fills the inner width would otherwise be clipped at draw time (the
+// view draws content at a one-cell inset and Wrap=false drops the
+// overflowing cell).
+func commandPanelLines(cmd string, innerWidth int) []string {
+	lines := wrapCommandLines(cmd, innerWidth-1)
+	for i, l := range lines {
+		lines[i] = " " + l
+	}
+	return lines
+}
+
 // fullscreenPlanCommand returns the YAML-configured command of the fullscreen
 // target, or "" when the target is ad-hoc or its plan entry has no command.
 // The session list keeps refreshing every 300ms even in fullscreen, so read
@@ -323,7 +337,7 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	cmd := a.fullscreenPlanCommand()
 	cmdTop := 0
 	if cmd != "" {
-		lines := wrapCommandLines(cmd, maxX-2)
+		lines := commandPanelLines(cmd, maxX-2)
 		rows := len(lines)
 		if maxRows := maxY - 11; rows > maxRows {
 			rows = maxRows
@@ -340,7 +354,7 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 			vc.Editable = false
 			vc.Clear()
 			for _, l := range lines[:rows] {
-				fmt.Fprintln(vc, " "+l)
+				fmt.Fprintln(vc, l)
 			}
 		}
 	}
