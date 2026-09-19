@@ -93,7 +93,7 @@ func TestServiceCreate(t *testing.T) {
 	assert.True(t, strings.HasPrefix(script, "/tmp/lazytmux-cmd-"), "script must live directly under /tmp, not TMPDIR")
 
 	// The mock never runs the session, so the script's self-delete line never
-	// fires — remove it at test end.
+	// fires, remove it at test end.
 	t.Cleanup(func() { _ = os.Remove(script) })
 
 	data, err := os.ReadFile(script)
@@ -251,7 +251,7 @@ func TestServiceCaptureCrops(t *testing.T) {
 func TestServiceCaptureAnchorsToCursor(t *testing.T) {
 	mock := tmux.NewMockClient()
 	// 40 rows of screen; the shell prompt sits on the last row, below a
-	// full-screen program's remains (rows 0-38) — like after `top` exits
+	// full-screen program's remains (rows 0-38), like after `top` exits
 	// without restoring the screen.
 	rows := make([]string, 40)
 	for i := range rows {
@@ -394,7 +394,7 @@ func TestServiceApplyPlanCreatesMissing(t *testing.T) {
 	assert.Empty(t, shell.Command, "a planned session without a command is a plain shell")
 	assert.Equal(t, "/work", shell.StartDir)
 
-	// The mock never runs the sessions, so the self-delete line never fires —
+	// The mock never runs the sessions, so the self-delete line never fires,
 	// remove the scripts at test end (same pattern as TestServiceCreate).
 	for _, opts := range mock.NewSessionOptsList {
 		if opts.Command == "" {

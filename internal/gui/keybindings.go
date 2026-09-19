@@ -17,7 +17,7 @@ import (
 // rune bindings are skipped and unmatched runes go to the Editor, so typing
 // in a dialog never triggers global actions. Special keys (Enter/Esc/Tab)
 // still match view bindings before the Editor. The confirm-delete dialog is
-// NOT editable, so its rune keys (y/n/q) dispatch normally — and the global
+// NOT editable, so its rune keys (y/n/q) dispatch normally, and the global
 // rune handlers below still guard on a.dialog being open, which covers that
 // case (j/k/n/d/r are not bound on the confirm view).
 func (a *App) setupKeybindings() error {
@@ -213,7 +213,7 @@ func (a *App) cursorMoveHandler(delta int) func(*gocui.Gui, *gocui.View) error {
 // bindings) and fullscreen (Tab is forwarded to the pane in live mode and
 // must not leak into a focus change in scroll mode). An active preview scroll
 // survives the focus change: the frozen snapshot keeps its position while the
-// user peeks at the session list — it only resets on the documented events
+// user peeks at the session list, it only resets on the documented events
 // (selecting a different session, resizing, entering fullscreen, or the
 // target disappearing).
 func (a *App) cycleFocusHandler(g *gocui.Gui, v *gocui.View) error {
@@ -376,7 +376,7 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 		}
 		a.previewScroll.Page(delta)
 		// A downward gesture reaching the live bottom returns to the live
-		// capture — loaded or not, so the result is independent of load timing.
+		// capture, loaded or not, so the result is independent of load timing.
 		if a.previewScroll.offsetFromBottom == 0 && delta > 0 {
 			a.exitPreviewScroll()
 			return nil
@@ -387,7 +387,7 @@ func (a *App) pageHandler(tmuxKey string) func(*gocui.Gui, *gocui.View) error {
 }
 
 // wheelHandler handles the mouse wheel: in fullscreen it enters scroll mode
-// (if needed) and scrolls — unless the pane's program runs in the alternate
+// (if needed) and scrolls, unless the pane's program runs in the alternate
 // screen with SGR mouse tracking (e.g. Claude Code), in which case the wheel
 // is forwarded to the pane as a real SGR mouse event so the program scrolls its own
 // history. On the dashboard the wheel scrolls the preview panel.
@@ -404,7 +404,7 @@ const wheelTmuxTimeout = 250 * time.Millisecond
 
 // wheelHandlerAt handles a view-scoped wheel event: the coordinates are the
 // actual mouse position (content-relative), which SGR consumers use to pick
-// the hovered widget — pane cursor coordinates would target the wrong one.
+// the hovered widget, pane cursor coordinates would target the wrong one.
 func (a *App) wheelHandlerAt(delta, x, y int) {
 	a.wheel(delta, x, y, true)
 }
@@ -412,7 +412,7 @@ func (a *App) wheelHandlerAt(delta, x, y int) {
 func (a *App) wheel(delta, x, y int, hasPos bool) {
 	if a.fullscreen.IsActive() {
 		// The scroll-state check, the pane query/adoption, and the forward
-		// are one fsMu section — recordPaneLocked rebinds the pane under the
+		// are one fsMu section, recordPaneLocked rebinds the pane under the
 		// same lock, so a rebind can never race the injection. The lock is
 		// released before the scroll fallback (enterScrollMode takes it).
 		a.fsMu.Lock()
@@ -425,7 +425,7 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 				// time: the pane may have stopped tracking mouse input
 				// since the last observation (e.g. vim exited), and raw SGR
 				// bytes must never reach a program that cannot parse them.
-				// One tmux call per wheel — the same cost as any forwarded
+				// One tmux call per wheel, the same cost as any forwarded
 				// key, and inherently ordered with keyboard input. The calls
 				// carry a short timeout so a wedged tmux cannot freeze the
 				// interface for the full client timeout on every wheel.
@@ -436,7 +436,7 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 					// target to its current active pane at dispatch time, and
 					// fsMu serializes it against every internal rebind. A
 					// recorded binding from before a pane switch must not
-					// divert the wheel into scroll mode — adopt the queried
+					// divert the wheel into scroll mode, adopt the queried
 					// pane (dropping the old pane's buffer, like a capture
 					// that observes the switch) and send to it, so the first
 					// wheel after a switch still forwards.
@@ -468,7 +468,7 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 			}
 			// Positionless events come from the global binding (the mouse
 			// is over the status bar, not the pane). The view-scoped "main"
-			// binding covers every wheel event actually over the pane —
+			// binding covers every wheel event actually over the pane,
 			// ignore these rather than forwarding at the pane cursor.
 			if !hasPos {
 				return
@@ -505,7 +505,7 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 	}
 	a.previewScroll.Move(delta)
 	// A downward gesture reaching the live bottom returns to the live
-	// capture — loaded or not, so the result is independent of load timing.
+	// capture, loaded or not, so the result is independent of load timing.
 	if a.previewScroll.offsetFromBottom == 0 && delta > 0 {
 		a.exitPreviewScroll()
 		return
@@ -513,7 +513,7 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 	a.g.Update(func(*gocui.Gui) error { return nil })
 }
 
-// clampWheelCoords bounds view mouse coordinates to the content area —
+// clampWheelCoords bounds view mouse coordinates to the content area,
 // gocui reports -1 on the top/left frame borders and the inner size on the
 // right/bottom ones, which SGR consumers would discard as out of range.
 func (a *App) clampWheelCoords(x, y int) (int, int) {

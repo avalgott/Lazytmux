@@ -393,7 +393,7 @@ func TestVersionViewRemovedOnShrinkToCompactLayout(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	// A previous tall layout registered the version view; the terminal
 	// then shrank below the strip threshold. (The fork reports ErrUnknownView
-	// for newly created views — the repo idiom treats that as success.)
+	// for newly created views, the repo idiom treats that as success.)
 	_, err = app.g.SetView("version", 0, 3, 12, 5, 0)
 	require.True(t, err == nil || isUnknownView(err))
 
@@ -933,7 +933,7 @@ func TestApplySessionRefreshClearsStaleList(t *testing.T) {
 	app.sessions = []session.Info{{Name: "home"}}
 
 	// Killing the last session exits the tmux server, and the service maps
-	// that to an empty list — the stale entry must disappear.
+	// that to an empty list, the stale entry must disappear.
 	app.applySessionRefresh(nil, nil)
 	assert.Empty(t, app.sessions)
 	assert.Nil(t, app.currentSession())
@@ -1273,7 +1273,7 @@ func TestPreviewScrollMoveExitsAtBottom(t *testing.T) {
 	app.previewScroll.Move(1)
 	assert.Equal(t, 1, app.previewScroll.offsetFromBottom)
 
-	// previewScrollMove exits the mode when the live bottom is reached —
+	// previewScrollMove exits the mode when the live bottom is reached,
 	// dispatch through the preview-focused path (focusMain = true) so the
 	// bottom-exit, not the session-change hook, is what is exercised.
 	app.focusMain = true
@@ -1595,7 +1595,7 @@ func TestPreviewScrollZeroHistoryExitsWithStatus(t *testing.T) {
 	seq := app.previewScroll.seq
 
 	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), "", "", make([]string, 5), 5, nil)
-	// The hint applies on the event loop via g.Update (headless no-op) —
+	// The hint applies on the event loop via g.Update (headless no-op),
 	// drive the applier directly.
 	app.applyNoHistoryHint("devbox", false, false, false)
 	assert.False(t, app.previewScroll.IsActive())
@@ -1923,7 +1923,7 @@ func TestScrollSnapshotRecognizesStrippedBlankHistory(t *testing.T) {
 	p := &fakeProvider{paneHeight: 10}
 	app := newTestApp(t, p)
 	// A 10-row pane whose bottom row is always blank: two feeds accumulate
-	// exactly 10 stripped lines — one real line of history at len == paneHeight.
+	// exactly 10 stripped lines, one real line of history at len == paneHeight.
 	rows := make([]string, 9)
 	for i := range rows {
 		rows[i] = fmt.Sprintf("r%02d", i)
@@ -2188,7 +2188,7 @@ func TestSessionGenAdvancesOnRecreatedIDWithNewCreated(t *testing.T) {
 	gen := app.sessionGen.Load()
 
 	// A tmux server restart recycles session IDs: same name and ID, but the
-	// creation timestamp differs — that must still invalidate.
+	// creation timestamp differs, that must still invalidate.
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 200}}, nil)
 	assert.NotEqual(t, gen, app.sessionGen.Load(), "a recycled ID with a new creation time is a new session")
 }
@@ -2352,7 +2352,7 @@ func TestSessionGenAdvancesOnServerRestart(t *testing.T) {
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 100, ServerPID: 1111}}, nil)
 	gen := app.sessionGen.Load()
 
-	// A same-second restart recycles the ID and the creation second — only
+	// A same-second restart recycles the ID and the creation second, only
 	// the server PID distinguishes the incarnations.
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 100, ServerPID: 2222}}, nil)
 	assert.NotEqual(t, gen, app.sessionGen.Load(), "a server restart must invalidate even with recycled ID and same-second creation")
@@ -2565,7 +2565,7 @@ func TestUnboundBufferKeptWhenUnrelatedSessionChanges(t *testing.T) {
 	app.feedBuffer("devbox", "live-output")
 
 	// An unrelated session appears: the global generation advances, but
-	// devbox's identity did not — its buffer must survive.
+	// devbox's identity did not, its buffer must survive.
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}, {Name: "other", ID: "$9"}}, nil)
 	assert.NotNil(t, app.bufferLookup("devbox"), "an unrelated session change must not drop this session's history")
 }

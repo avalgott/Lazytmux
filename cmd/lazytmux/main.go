@@ -64,7 +64,7 @@ func main() {
 //
 // When lazytmux runs inside a tmux session, the attach takes over the
 // terminal as a new tmux client (the original client is displaced), so after
-// detaching the user returns to the dashboard on a raw terminal — their
+// detaching the user returns to the dashboard on a raw terminal, their
 // original session is still alive detached and reachable with plain
 // `tmux attach`. The pty size is captured before the attach and restored
 // afterwards in case the client left it corrupt.

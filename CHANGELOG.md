@@ -79,7 +79,7 @@ also fixed.
 
 ### Summary
 
-First release: a dashboard for all your tmux sessions — browse them, watch what
+First release: a dashboard for all your tmux sessions, browse them, watch what
 they're doing live, create and remove them, and jump into any of them.
 
 ### Added

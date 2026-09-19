@@ -104,13 +104,13 @@ sessions:
   - name: shell
 ```
 
-Field rules: `version` is required (only `1` is supported), and `name` is required and must match the plan name. `root` is optional but must be an absolute path or start with `~`. A session `cwd` is optional and may be relative to `root`; `~` is expanded everywhere. Every path must exist and be a directory — the whole plan validates before anything is created, so a broken plan creates nothing and exits with an error. A session `command` is optional; leave it out for a plain shell session.
+Field rules: `version` is required (only `1` is supported), and `name` is required and must match the plan name. `root` is optional but must be an absolute path or start with `~`. A session `cwd` is optional and may be relative to `root`; `~` is expanded everywhere. Every path must exist and be a directory, the whole plan validates before anything is created, so a broken plan creates nothing and exits with an error. A session `command` is optional; leave it out for a plain shell session.
 
-Plans only create what is missing: an existing tmux session whose name matches a plan entry counts as that planned session and is never recreated, renamed, or killed by the plan. If one creation fails, the remaining sessions are still created and every failure is reported. Running the same command again is a no-op. tmux remains the source of truth — nothing is stored, and a planned session killed elsewhere stays gone until the next `--plan` run creates it again.
+Plans only create what is missing: an existing tmux session whose name matches a plan entry counts as that planned session and is never recreated, renamed, or killed by the plan. If one creation fails, the remaining sessions are still created and every failure is reported. Running the same command again is a no-op. tmux remains the source of truth, nothing is stored, and a planned session killed elsewhere stays gone until the next `--plan` run creates it again.
 
-In the dashboard, planned sessions are marked with a dim `●` before their name. They are ordinary tmux sessions — attach and fullscreen work as usual, and `n` still creates ad-hoc sessions that you can manage freely. Renaming or deleting a planned session is blocked with a log message while that plan is active.
+In the dashboard, planned sessions are marked with a dim `●` before their name. They are ordinary tmux sessions, attach and fullscreen work as usual, and `n` still creates ad-hoc sessions that you can manage freely. Renaming or deleting a planned session is blocked with a log message while that plan is active.
 
-In fullscreen, a planned session with a configured command shows a framed `Command` panel at the bottom with the exact command from the plan, wrapped to at most three rows. It always shows the plan command — never what the session is currently running.
+In fullscreen, a planned session with a configured command shows a framed `Command` panel at the bottom with the exact command from the plan, wrapped to at most three rows. It always shows the plan command, never what the session is currently running.
 
 Session Plans are deliberately startup metadata, not an orchestrator: no auto-restart, no ordering or dependencies, and no plan editing inside the TUI.
 
@@ -193,7 +193,7 @@ The gocui and tcell forks under `third_party/` are vendored (inherited from lazy
 - The preview shows the active pane of the active window of the selected session, one pane per session.
 - Fullscreen passthrough is capture-based: full-screen TUI apps (vim, htop) redraw with noticeable lag and some special key sequences can be lossy. Use `a` (real attach) for those.
 - With `a`, attaching from inside tmux takes over the terminal as a new tmux client (tmux has one client per tty), so your original session becomes detached. Detaching from the target returns you to the dashboard on the raw terminal; run `tmux attach` after quitting to get back into your original session.
-- Mouse support is limited to wheel scrolling (the preview panel and fullscreen); beyond optional Session Plan files there is no config, and no runtime state is persisted — deliberately out of scope for the MVP.
+- Mouse support is limited to wheel scrolling (the preview panel and fullscreen); beyond optional Session Plan files there is no config, and no runtime state is persisted, deliberately out of scope for the MVP.
 
 ## License
 
