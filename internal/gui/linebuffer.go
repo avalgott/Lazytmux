@@ -101,6 +101,16 @@ func (b *LineBuffer) update(scr []string) []string {
 	}
 	b.screen = scr
 
+	// A one-row pane has no overlap to align on at all: every fresh single
+	// row is treated as the next scrolled-in line so its predecessor is
+	// retained (no redraw signal exists at this size to distinguish on).
+	if n == 1 {
+		if scr[0] != b.lines[len(b.lines)-1] {
+			return capLines(append(b.lines, scr[0]), b.cap)
+		}
+		return capLines(b.lines, b.cap)
+	}
+
 	// Scroll-up: suffix of the previous screen matches the prefix of scr.
 	if d, ok := shiftUp(prevScreen, scr); ok && d > 0 {
 		added := scr[n-d:]
@@ -233,17 +243,24 @@ func (b *LineBuffer) update(scr []string) []string {
 }
 
 // shiftUp returns the scroll-up shift d (0 = identical) where
-// tail[d:] == scr[:n-d] with at least a two-line overlap. Redraw
-// protection lives in the caller's acceptance checks (freshness, rotation
-// replay, and same-region repaint), not in a fixed overlap ratio.
+// tail[d:] == scr[:n-d]. A two-line overlap guards taller screens against
+// coincidental matches, but a two-row pane's only possible shift overlaps
+// on a single row and must still match (one-row panes are handled by the
+// caller — they have no overlap at all). Redraw protection lives in the
+// caller's acceptance checks (freshness, rotation replay, and same-region
+// repaint), not in a fixed overlap ratio.
 func shiftUp(tail, scr []string) (int, bool) {
 	n := len(scr)
 	if len(tail) < n {
 		return 0, false // a shorter tail cannot align with the whole screen
 	}
+	minOv := 2
+	if n == 2 {
+		minOv = 1
+	}
 	for d := 0; d < n; d++ {
 		ov := n - d
-		if ov < 2 {
+		if ov < minOv {
 			return 0, false
 		}
 		if slices.Equal(tail[d:], scr[:ov]) {
@@ -253,15 +270,20 @@ func shiftUp(tail, scr []string) (int, bool) {
 	return 0, false
 }
 
-// shiftDown mirrors shiftUp: tail[:n-d] == scr[d:].
+// shiftDown mirrors shiftUp: tail[:n-d] == scr[d:], with the same
+// short-pane overlap relaxation.
 func shiftDown(tail, scr []string) (int, bool) {
 	n := len(scr)
 	if len(tail) < n {
 		return 0, false // a shorter tail cannot align with the whole screen
 	}
+	minOv := 2
+	if n == 2 {
+		minOv = 1
+	}
 	for d := 0; d < n; d++ {
 		ov := n - d
-		if ov < 2 {
+		if ov < minOv {
 			return 0, false
 		}
 		if slices.Equal(tail[:ov], scr[d:]) {

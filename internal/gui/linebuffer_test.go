@@ -370,6 +370,42 @@ func TestLineBufferHalfScreenJumpKeepsAllRows(t *testing.T) {
 	assert.Equal(t, want, b.Snapshot(), "a half-screen jump must retain the scrolled-off rows")
 }
 
+func TestLineBufferTwoRowPaneOneLineScrollKeepsHistory(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b"))
+	// A two-row pane scrolled by one line: the only possible overlap is a
+	// single row, which must still count as a shift — the scrolled-off row
+	// is real history.
+	b.Feed(screen("b", "c"))
+	assert.Equal(t, []string{"a", "b", "c"}, b.Snapshot(),
+		"a one-line scroll in a two-row pane must retain the scrolled-off row")
+}
+
+func TestLineBufferTwoRowPaneReverseScrollKeepsHistory(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("b", "c"))
+	b.Feed(screen("a", "b"))
+	assert.Equal(t, []string{"a", "b", "c"}, b.Snapshot(),
+		"a one-line reverse scroll in a two-row pane must prepend the revealed row")
+}
+
+func TestLineBufferOneRowPaneRetainsSuccessiveLines(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a"))
+	b.Feed(screen("b"))
+	b.Feed(screen("c"))
+	assert.Equal(t, []string{"a", "b", "c"}, b.Snapshot(),
+		"a one-row pane has no overlap to align on: each fresh row is the next line")
+}
+
+func TestLineBufferOneRowPaneRepaintDoesNotDuplicate(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a"))
+	b.Feed(screen("a"))
+	assert.Equal(t, []string{"a"}, b.Snapshot(),
+		"a one-row repaint must not duplicate the retained line")
+}
+
 func TestLineBufferThinOverlapRedrawReplacesScreen(t *testing.T) {
 	b := NewLineBuffer(100)
 	b.Feed(screen("a", "b", "c", "d", "e"))
