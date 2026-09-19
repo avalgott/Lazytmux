@@ -224,6 +224,37 @@ func (b *LineBuffer) update(scr []string) []string {
 				return capLines(append(b.lines, scr[o:]...), b.cap)
 			}
 		}
+		// Reverse counterpart: the new screen's SUFFIX overlaps the old
+		// screen's HEAD — a reverse scroll hidden behind a height change
+		// (e.g. trailing blank rows appearing). The genuinely new head is
+		// prepended after deduping rows the buffer already retains. A full
+		// prefix overlap (r == len(scr)) stays a plain shrink and falls
+		// through to the replace path.
+		r := 0
+		for k := 1; k <= len(prevScreen) && k <= len(scr); k++ {
+			if slices.Equal(scr[len(scr)-k:], prevScreen[:k]) {
+				r = k
+			}
+		}
+		if r > 0 && r < len(scr) {
+			// Unless the revealed head replays the dropped tail (a
+			// rotation), prepend the rows that are not already retained.
+			if !majorityEqual(scr[:len(scr)-r], prevScreen[r:]) {
+				missing := scr[:len(scr)-r]
+				k := len(missing)
+				if k > len(b.lines) {
+					k = len(b.lines)
+				}
+				for k > 0 && !slices.Equal(missing[len(missing)-k:], b.lines[:k]) {
+					k--
+				}
+				missing = missing[:len(missing)-k]
+				if len(missing) > 0 {
+					return capLines(append(append([]string(nil), missing...), b.lines...), b.cap)
+				}
+				return capLines(b.lines, b.cap)
+			}
+		}
 	}
 	if len(b.lines) >= prev {
 		prefix := b.lines[:len(b.lines)-prev]

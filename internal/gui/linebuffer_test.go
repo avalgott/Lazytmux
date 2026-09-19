@@ -406,6 +406,29 @@ func TestLineBufferOneRowPaneRepaintDoesNotDuplicate(t *testing.T) {
 		"a one-row repaint must not duplicate the retained line")
 }
 
+func TestLineBufferSizeMismatchReverseScrollKeepsNewerRows(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b", "c", "d", "e"))
+	b.Feed(screen("c", "d", "e"))
+	// A reverse scroll hidden behind a height change: the revealed head is
+	// older content already retained, and the row that scrolled off the
+	// bottom must survive as newer history.
+	b.Feed(screen("a", "b", "c", "d"))
+	assert.Equal(t, []string{"a", "b", "c", "d", "e"}, b.Snapshot(),
+		"a reverse scroll with a size mismatch must keep the newer tail")
+}
+
+func TestLineBufferSizeMismatchReverseScrollPrependsFreshRows(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("x", "y", "z", "d", "e"))
+	b.Feed(screen("z", "d", "e"))
+	// The same shape, but the revealed rows are new: they prepend, and the
+	// newer tail survives.
+	b.Feed(screen("a", "b", "z", "d"))
+	assert.Equal(t, []string{"a", "b", "x", "y", "z", "d", "e"}, b.Snapshot(),
+		"fresh rows revealed by a size-mismatched reverse scroll must prepend")
+}
+
 func TestLineBufferThinOverlapRedrawReplacesScreen(t *testing.T) {
 	b := NewLineBuffer(100)
 	b.Feed(screen("a", "b", "c", "d", "e"))
