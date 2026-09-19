@@ -220,6 +220,11 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 		vver.Title = " Version "
 		vver.Clear()
 		fmt.Fprintf(vver, " %s", a.version)
+	} else {
+		// The terminal shrank below the strip threshold: a version view
+		// from the taller layout would otherwise stay registered at its
+		// old coordinates, overlapping the compact panels.
+		g.DeleteView("version")
 	}
 
 	// Main panel (right side) — live preview of the selected session

@@ -285,6 +285,22 @@ func TestVersionPanelRendersVersion(t *testing.T) {
 	assert.Contains(t, v.Buffer(), "0.2.0", "the installed version must be shown in the version panel")
 }
 
+func TestVersionViewRemovedOnShrinkToCompactLayout(t *testing.T) {
+	app, err := NewAppHeadless(&fakeProvider{}, 40, 9)
+	require.NoError(t, err)
+	t.Cleanup(func() { app.g.Close() })
+	app.sessions = []session.Info{{Name: "devbox"}}
+	// A previous tall layout registered the version view; the terminal
+	// then shrank below the strip threshold. (The fork reports ErrUnknownView
+	// for newly created views — the repo idiom treats that as success.)
+	_, err = app.g.SetView("version", 0, 3, 12, 5, 0)
+	require.True(t, err == nil || isUnknownView(err))
+
+	require.NoError(t, app.layout(app.g))
+	_, err = app.g.View("version")
+	assert.Error(t, err, "shrinking below the strip threshold must remove the stale version view")
+}
+
 func TestVersionPanelOmittedOnShortTerminals(t *testing.T) {
 	app, err := NewAppHeadless(&fakeProvider{}, 40, 9)
 	require.NoError(t, err)
