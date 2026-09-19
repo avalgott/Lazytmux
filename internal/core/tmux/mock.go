@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+// WheelEvent is one recorded SendMouseWheel call.
+type WheelEvent struct {
+	Target string
+	Up     bool
+	X, Y   int
+}
+
 // MockClient implements Client for testing.
 type MockClient struct {
 	Sessions      map[string][]WindowInfo
@@ -17,6 +24,9 @@ type MockClient struct {
 	SentKeys      map[string][]string
 	Options       map[string]string
 	Messages      map[string]string
+	PaneHeight    int          // returned by CapturePaneANSIHistory
+	PaneID        string       // returned by CapturePaneANSIWithCursor
+	WheelEvents   []WheelEvent // recorded SendMouseWheel calls
 
 	// Infos are the tmux sessions returned by ListSessions (name -> info).
 	Infos map[string]SessionInfo
@@ -207,9 +217,9 @@ func (m *MockClient) CapturePaneANSI(_ context.Context, target string) (string, 
 	return m.Captured[target], nil
 }
 
-func (m *MockClient) CapturePaneANSIWithCursor(_ context.Context, target string) (string, int, int, error) {
+func (m *MockClient) CapturePaneANSIWithCursor(_ context.Context, target string) (string, int, int, string, error) {
 	if m.ErrCapture != nil {
-		return "", 0, 0, m.ErrCapture
+		return "", 0, 0, "", m.ErrCapture
 	}
 	cursorX, cursorY := 0, 0
 	if pos := m.Messages[target]; pos != "" {
@@ -219,17 +229,36 @@ func (m *MockClient) CapturePaneANSIWithCursor(_ context.Context, target string)
 			cursorY, _ = strconv.Atoi(parts[1])
 		}
 	}
-	return m.Captured[target], cursorX, cursorY, nil
+	return m.Captured[target], cursorX, cursorY, m.PaneID, nil
 }
 
-func (m *MockClient) CapturePaneANSIHistory(_ context.Context, target string) (string, error) {
+func (m *MockClient) CapturePaneANSIHistory(_ context.Context, target string) (string, int, string, error) {
 	if m.ErrCapture != nil {
-		return "", m.ErrCapture
+		return "", 0, "", m.ErrCapture
 	}
 	if content, ok := m.RangeCaptures[target+":hist"]; ok {
-		return content, nil
+		return content, m.PaneHeight, m.PaneID, nil
 	}
-	return m.Captured[target], nil
+	return m.Captured[target], m.PaneHeight, m.PaneID, nil
+}
+
+func (m *MockClient) PaneInputFlags(_ context.Context, target string) (bool, bool, int, int, string, error) {
+	if m.ErrShowMessage != nil {
+		return false, false, 0, 0, "", m.ErrShowMessage
+	}
+	flags := m.Messages[target+"#flags"]
+	if flags == "" {
+		return false, false, 0, 0, "", nil
+	}
+	return parseInputFlags(flags)
+}
+
+func (m *MockClient) SendMouseWheel(_ context.Context, target string, up bool, x, y int) error {
+	if m.ErrSendKeys != nil {
+		return m.ErrSendKeys
+	}
+	m.WheelEvents = append(m.WheelEvents, WheelEvent{Target: target, Up: up, X: x, Y: y})
+	return nil
 }
 
 func (m *MockClient) SendKeys(_ context.Context, target string, keys ...string) error {

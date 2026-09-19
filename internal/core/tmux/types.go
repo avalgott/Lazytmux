@@ -21,12 +21,13 @@ type WindowInfo struct {
 
 // SessionInfo represents a tmux session.
 type SessionInfo struct {
-	Name     string // session name
-	ID       string // session unique ID (e.g., $1)
-	Path     string // working directory of the session
-	Attached bool   // whether any client is attached
-	Windows  int    // number of windows
-	Created  int64  // creation unix timestamp
+	Name      string // session name
+	ServerPID int64  // the tmux server's PID — the server incarnation
+	ID        string // session unique ID (e.g., $1)
+	Path      string // working directory of the session
+	Attached  bool   // whether any client is attached
+	Windows   int    // number of windows
+	Created   int64  // creation unix timestamp
 }
 
 // PaneInfo represents a tmux pane.

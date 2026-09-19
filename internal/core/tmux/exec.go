@@ -238,7 +238,7 @@ func (c *ExecClient) NewSession(ctx context.Context, opts NewSessionOpts) error 
 
 func (c *ExecClient) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 	out, err := c.run(ctx, "list-sessions", "-F",
-		"#{session_name}\t#{session_id}\t#{session_path}\t#{session_attached}\t#{session_windows}\t#{session_created}")
+		"#{session_name}\t#{session_id}\t#{session_path}\t#{session_attached}\t#{session_windows}\t#{session_created}\t#{pid}")
 	if err != nil {
 		return nil, err
 	}
@@ -347,12 +347,12 @@ func (c *ExecClient) CapturePaneANSI(ctx context.Context, target string) (string
 // CapturePaneANSIWithCursor captures the pane content and the cursor position
 // in a single tmux invocation (capture-pane followed by display-message in
 // the same command batch). The last line of the output is the cursor pair.
-func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target string) (string, int, int, error) {
+func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target string) (string, int, int, string, error) {
 	ctx2, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
 	args := []string{"capture-pane", "-t", target, "-ep", ";",
-		"display-message", "-t", target, "-p", "#{cursor_x},#{cursor_y}"}
+		"display-message", "-t", target, "-p", "#{cursor_x},#{cursor_y} #{pane_id}"}
 	fullArgs := c.prependSocket(args)
 	cmd := exec.CommandContext(ctx2, c.tmuxBin, fullArgs...)
 	var stderr strings.Builder
@@ -360,29 +360,167 @@ func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target strin
 	out, err := cmd.Output()
 	c.logCmd("CapturePaneANSIWithCursor", fullArgs, string(out), err)
 	if err != nil {
-		return "", 0, 0, fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
+		return "", 0, 0, "", fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
 	}
 
-	// The cursor pair is the last line of the combined output. Both commands
-	// end their output with a newline, so trim trailing newlines first.
-	s := strings.TrimRight(string(out), "\n")
-	idx := strings.LastIndex(s, "\n")
-	if idx < 0 {
-		return s, 0, 0, nil
+	content, cursorX, cursorY, paneID := splitCursorPair(string(out))
+	return content, cursorX, cursorY, paneID, nil
+}
+
+// splitCursorPair splits the combined output of
+// "capture-pane -ep ; display-message -p #{cursor_x},#{cursor_y}" into the
+// capture content and the cursor position. The cursor pair is the final
+// line when it parses as two integers. Splitting by line structure (rather
+// than trimming trailing newlines) keeps blank trailing rows — an
+// alt-screen app's cursor row — which TrimRight would destroy, wobbling the
+// row count between captures.
+func splitCursorPair(out string) (content string, cursorX, cursorY int, paneID string) {
+	lines := strings.Split(out, "\n")
+	// The output ends with the cursor line's newline; drop that phantom.
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
 	}
-	content := s[:idx]
-	cursorX, cursorY := 0, 0
-	if parts := strings.SplitN(strings.TrimSpace(s[idx+1:]), ",", 2); len(parts) == 2 {
-		cursorX, _ = strconv.Atoi(parts[0])
-		cursorY, _ = strconv.Atoi(parts[1])
+	if n := len(lines); n > 0 {
+		// The cursor line is "x,y %N": the cursor pair plus the pane ID, so
+		// the capture and the pane it came from are one atomic observation.
+		if parts := strings.SplitN(strings.TrimSpace(lines[n-1]), ",", 2); len(parts) == 2 {
+			x, errX := strconv.Atoi(parts[0])
+			rest := strings.Fields(parts[1])
+			if len(rest) >= 1 {
+				if y, errY := strconv.Atoi(rest[0]); errX == nil && errY == nil {
+					cursorX, cursorY = x, y
+					if len(rest) >= 2 {
+						paneID = rest[1]
+					}
+					lines = lines[:n-1]
+				}
+			}
+		}
 	}
-	return content, cursorX, cursorY, nil
+	return strings.Join(lines, "\n"), cursorX, cursorY, paneID
 }
 
 // CapturePaneANSIHistory captures from the oldest history line to the
-// current bottom in one operation ("-" is tmux's start-of-history sentinel).
-func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) (string, error) {
-	return c.runRaw(ctx, "capture-pane", "-t", target, "-ep", "-S", "-")
+// current bottom in one operation ("-" is tmux's start-of-history sentinel),
+// plus the pane's height from the same atomic invocation. The height
+// distinguishes real scrollback from a snapshot that contains nothing but
+// the visible screen (alternate-screen panes such as Claude Code have no
+// saved history at all).
+func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) (string, int, string, error) {
+	ctx2, cancel := context.WithTimeout(ctx, defaultTimeout)
+	defer cancel()
+
+	args := []string{"capture-pane", "-t", target, "-ep", "-S", "-", ";",
+		"display-message", "-t", target, "-p", "#{pane_height} #{pane_id}"}
+	fullArgs := c.prependSocket(args)
+	cmd := exec.CommandContext(ctx2, c.tmuxBin, fullArgs...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	c.logCmd("CapturePaneANSIHistory", fullArgs, string(out), err)
+	if err != nil {
+		return "", 0, "", fmt.Errorf("tmux %s: %w (stderr: %s)", strings.Join(fullArgs, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return splitPaneHeightLine(string(out))
+}
+
+// PaneInputFlags reports the pane's input mode in one display-message call:
+// whether the alternate screen is active, whether the program has mouse
+// tracking enabled with the SGR (1006) encoding — the only encoding
+// SendMouseWheel emits — and the pane cursor position (0-based). The format
+// is the positional argument, matching ShowMessage — display-message expands
+// format variables there on every tmux version.
+//
+// mouse_any_flag is the aggregate over every tracking mode (1000 standard,
+// 1002 button-event, 1003 any-event), NOT the 1003-only flag — that is
+// mouse_all_flag, which would exclude vim-style 1000/1002 tracking. Verified
+// against a live tmux: 1002+1006 reports any=1 sgr=1 (forward), 1006 alone
+// reports any=0 sgr=1 (do not forward).
+func (c *ExecClient) PaneInputFlags(ctx context.Context, target string) (bool, bool, int, int, string, error) {
+	out, err := c.run(ctx, "display-message", "-t", target, "-p",
+		"#{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{cursor_x} #{cursor_y} #{pane_id}")
+	if err != nil {
+		return false, false, 0, 0, "", err
+	}
+	return parseInputFlags(out)
+}
+
+// SendMouseWheel sends a mouse wheel event to the target pane's input stream
+// as a single SGR mouse escape sequence (wheel motion is an impulse — there
+// is no release event). A program with SGR mouse tracking enabled reads it
+// as a real wheel event.
+func (c *ExecClient) SendMouseWheel(ctx context.Context, target string, up bool, x, y int) error {
+	_, err := c.run(ctx, "send-keys", "-l", "-t", target, "--", sgrWheel(up, x, y))
+	return err
+}
+
+// splitPaneHeightLine splits the combined output of
+// "capture-pane -ep -S - ; display-message -p #{pane_height}" into the raw
+// capture content (its trailing newline preserved — capture output terminates
+// with one) and the pane height.
+func splitPaneHeightLine(out string) (string, int, string, error) {
+	s := strings.TrimRight(out, "\n")
+	idx := strings.LastIndex(s, "\n")
+	if idx < 0 {
+		return "", 0, "", fmt.Errorf("capture output missing pane-height line")
+	}
+	fields := strings.Fields(s[idx+1:])
+	if len(fields) < 1 {
+		return "", 0, "", fmt.Errorf("capture output missing pane-height line")
+	}
+	h, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return "", 0, "", fmt.Errorf("invalid pane height %q: %w", fields[0], err)
+	}
+	paneID := ""
+	if len(fields) >= 2 {
+		paneID = fields[1]
+	}
+	return s[:idx+1], h, paneID, nil
+}
+
+// parseInputFlags parses the display-message output of
+// "#{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{cursor_x} #{cursor_y}".
+// The mouse result is true only when a tracking mode is enabled AND the SGR
+// (1006) encoding is selected — SGR alone leaves a program that is not
+// listening for mouse events, and any other encoding would not understand
+// the SGR sequences SendMouseWheel emits. mouse_any_flag covers every
+// tracking mode (1000/1002/1003); mouse_all_flag would restrict the check
+// to 1003 and stop forwarding to vim-style 1002-tracking panes.
+func parseInputFlags(s string) (altOn, mouseSGR bool, cx, cy int, paneID string, err error) {
+	fields := strings.Fields(s)
+	if len(fields) != 6 {
+		return false, false, 0, 0, "", fmt.Errorf("unexpected input flags %q", s)
+	}
+	var nums [5]int
+	for i, f := range fields[:5] {
+		n, e := strconv.Atoi(f)
+		if e != nil {
+			return false, false, 0, 0, "", fmt.Errorf("invalid input flags %q: %w", s, e)
+		}
+		nums[i] = n
+	}
+	return nums[0] == 1, nums[1] == 1 && nums[2] == 1, nums[3], nums[4], fields[5], nil
+}
+
+// sgrWheel builds the SGR mouse escape sequence for one wheel step. Wheel
+// motion is reported as single impulses — unlike button presses there is no
+// release event, so appending one would inject a spurious second event.
+// Coordinates are converted from 0-based pane-relative mouse coordinates
+// to SGR's 1-based scheme, clamped to at least 1.
+func sgrWheel(up bool, x, y int) string {
+	b := 64
+	if !up {
+		b = 65
+	}
+	cx, cy := x+1, y+1
+	if cx < 1 {
+		cx = 1
+	}
+	if cy < 1 {
+		cy = 1
+	}
+	return fmt.Sprintf("\x1b[<%d;%d;%dM", b, cx, cy)
 }
 
 func (c *ExecClient) SendKeys(ctx context.Context, target string, keys ...string) error {
@@ -467,20 +605,22 @@ func parseSessions(out string) []SessionInfo {
 	}
 	var sessions []SessionInfo
 	for _, line := range strings.Split(out, "\n") {
-		parts := strings.SplitN(line, "\t", 6)
-		if len(parts) < 6 {
+		parts := strings.SplitN(line, "\t", 7)
+		if len(parts) < 7 {
 			continue
 		}
 		attached := parts[3] != "0"
 		windows, _ := strconv.Atoi(parts[4])
 		created, _ := strconv.ParseInt(parts[5], 10, 64)
+		serverPID, _ := strconv.ParseInt(parts[6], 10, 64)
 		sessions = append(sessions, SessionInfo{
-			Name:     parts[0],
-			ID:       parts[1],
-			Path:     parts[2],
-			Attached: attached,
-			Windows:  windows,
-			Created:  created,
+			Name:      parts[0],
+			ServerPID: serverPID,
+			ID:        parts[1],
+			Path:      parts[2],
+			Attached:  attached,
+			Windows:   windows,
+			Created:   created,
 		})
 	}
 	return sessions

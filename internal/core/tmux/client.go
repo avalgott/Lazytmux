@@ -51,13 +51,27 @@ type Client interface {
 	// and the cursor must come from the same pane state — full-screen
 	// programs that repaint constantly (e.g. Claude Code) shift their layout
 	// between two separate calls, which puts the rendered cursor one row off.
-	CapturePaneANSIWithCursor(ctx context.Context, target string) (content string, cursorX, cursorY int, err error)
+	CapturePaneANSIWithCursor(ctx context.Context, target string) (content string, cursorX, cursorY int, paneID string, err error)
 
 	// CapturePaneANSIHistory captures the whole pane history from tmux's
 	// oldest-history sentinel ("-S -") to the current bottom in one
-	// operation. Both bounds are resolved atomically by tmux, so a pane
-	// that scrolls concurrently cannot produce a partial snapshot.
-	CapturePaneANSIHistory(ctx context.Context, target string) (string, error)
+	// operation, plus the pane height from the same atomic invocation. Both
+	// bounds are resolved atomically by tmux, so a pane that scrolls
+	// concurrently cannot produce a partial snapshot. The height lets callers
+	// detect alternate-screen panes, whose capture contains nothing beyond
+	// the visible screen.
+	CapturePaneANSIHistory(ctx context.Context, target string) (content string, paneHeight int, paneID string, err error)
+
+	// PaneInputFlags reports the pane's input mode: alternate screen active,
+	// SGR (1006) mouse tracking enabled, and the 0-based pane cursor
+	// position.
+	PaneInputFlags(ctx context.Context, target string) (altOn, mouseAny bool, cursorX, cursorY int, paneID string, err error)
+
+	// SendMouseWheel sends a mouse wheel event to the pane's input stream
+	// as SGR mouse escape sequences. x and y are the 0-based pane-relative
+	// mouse coordinates of the event, not the pane's cursor position — SGR
+	// consumers pick the hovered widget from them.
+	SendMouseWheel(ctx context.Context, target string, up bool, x, y int) error
 
 	// SendKeys sends key sequences to a tmux target.
 	// Keys are interpreted as tmux key names (e.g., "Enter", "Space").

@@ -374,3 +374,66 @@ func TestShellWrapperExecutesUnderFish(t *testing.T) {
 	assert.Contains(t, string(out), "WRAPPER-RAN")
 	assert.Contains(t, string(out), "SHELL-ALIVE", "the relaunched fish shell must run")
 }
+
+func TestServiceCaptureScrollbackSetsPaneHeight(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.Captured["devbox"] = "line1\nline2\n"
+	mock.PaneHeight = 42
+
+	svc := NewService(mock)
+	preview, err := svc.CaptureScrollback(context.Background(), "devbox")
+	require.NoError(t, err)
+	assert.Equal(t, "line1\nline2\n", preview.Content)
+	assert.Equal(t, 42, preview.PaneHeight, "the pane height rides along with the snapshot")
+}
+
+func TestServicePaneInputFlags(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.Messages["devbox#flags"] = "1 1 1 12 34 %7"
+
+	svc := NewService(mock)
+	alt, mouse, cx, cy, _, err := svc.PaneInputFlags(context.Background(), "devbox")
+	require.NoError(t, err)
+	assert.True(t, alt)
+	assert.True(t, mouse)
+	assert.Equal(t, 12, cx)
+	assert.Equal(t, 34, cy)
+}
+
+func TestServiceForwardMouseWheel(t *testing.T) {
+	mock := tmux.NewMockClient()
+
+	svc := NewService(mock)
+	require.NoError(t, svc.ForwardMouseWheel(context.Background(), "devbox", true, 10, 5))
+	require.NoError(t, svc.ForwardMouseWheel(context.Background(), "devbox", false, 0, 0))
+
+	require.Len(t, mock.WheelEvents, 2)
+	assert.Equal(t, tmux.WheelEvent{Target: "devbox", Up: true, X: 10, Y: 5}, mock.WheelEvents[0])
+	assert.Equal(t, tmux.WheelEvent{Target: "devbox", Up: false, X: 0, Y: 0}, mock.WheelEvents[1])
+}
+
+func TestServiceCaptureKeepsFullContent(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.Captured["devbox"] = strings.Join([]string{
+		"row0", "row1", strings.Repeat("w", 120),
+	}, "\n")
+
+	svc := NewService(mock)
+	preview, err := svc.Capture(context.Background(), "devbox", 20, 2)
+	require.NoError(t, err)
+	assert.Equal(t, 3, len(strings.Split(preview.Full, "\n")), "Full keeps every pane row untruncated")
+	assert.Contains(t, preview.Full, strings.Repeat("w", 120), "Full keeps full-width rows")
+	// The windowed Content remains as before (truncated to the preview size).
+	assert.NotContains(t, preview.Content, strings.Repeat("w", 120))
+}
+
+func TestServiceListCarriesSessionID(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.Infos["devbox"] = tmux.SessionInfo{Name: "devbox", ID: "$5", Path: "/home/u"}
+
+	svc := NewService(mock)
+	infos, err := svc.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	assert.Equal(t, "$5", infos[0].ID, "the stable tmux session ID rides along for buffer identity")
+}

@@ -39,7 +39,8 @@ func (r Rect) Height() int {
 // Layout holds pre-computed view positions for the main screen.
 type Layout struct {
 	Sessions Rect // upper-left panel
-	Logs     Rect // lower-left panel (status/error messages)
+	Logs     Rect // middle-left panel (status/error messages)
+	Version  Rect // lower-left strip (installed app version)
 	Main     Rect // right panel (preview)
 	Options  Rect // bottom bar
 }
@@ -47,8 +48,9 @@ type Layout struct {
 // ComputeLayout calculates view positions for the given terminal size.
 // The split column logic mirrors lazyclaude's ComputeLayout: the left column
 // is a third of the terminal, clamped so both columns remain usable. The
-// left column stacks the sessions panel (upper two thirds) and the logs
-// panel (lower third), like lazyclaude's sessions/plugins/logs stack.
+// left column stacks the sessions panel (upper two thirds), the logs panel,
+// and a three-row version strip pinned above the options bar, like
+// lazyclaude's sessions/plugins/logs stack.
 //
 // gocui quirk: content is always drawn at (x0+1, y0+1) and the writable area
 // is Width-2 / Height-2, so every view needs 2 extra rows/cols. The options
@@ -71,15 +73,31 @@ func ComputeLayout(width, height int) Layout {
 	leftH := maxY - 2 // rows available to the left-column panels
 	sessY1 := (leftH * 2) / 3
 	logsY0 := sessY1 + 1
+	// The version strip is exactly three rows — top border (with the
+	// title), the version content, bottom border — pinned to the bottom of
+	// the left column, right above the options bar. On short terminals the
+	// strip is omitted entirely (a zero rect), so the session list and the
+	// logs keep usable inner rows instead.
+	showVersion := maxY >= 12
+	logsY1 := maxY - 2
+	if showVersion {
+		logsY1 = maxY - 5
+	}
 	// Keep the logs panel usable on very short terminals.
-	if logsY0 > maxY-5 {
-		logsY0 = maxY - 5
+	if logsY0 > logsY1-2 {
+		logsY0 = logsY1 - 2
 		sessY1 = logsY0 - 1
+	}
+
+	var version Rect
+	if showVersion {
+		version = Rect{X0: 0, Y0: maxY - 4, X1: splitX - 1, Y1: maxY - 2}
 	}
 
 	return Layout{
 		Sessions: Rect{X0: 0, Y0: 0, X1: splitX - 1, Y1: sessY1},
-		Logs:     Rect{X0: 0, Y0: logsY0, X1: splitX - 1, Y1: maxY - 2},
+		Logs:     Rect{X0: 0, Y0: logsY0, X1: splitX - 1, Y1: logsY1},
+		Version:  version,
 		Main:     Rect{X0: splitX, Y0: 0, X1: maxX - 1, Y1: maxY - 2},
 		Options:  Rect{X0: 0, Y0: maxY - 2, X1: maxX - 1, Y1: maxY},
 	}
@@ -112,12 +130,19 @@ func (a *App) layout(g *gocui.Gui) error {
 		a.preview.Invalidate()
 		a.lastWidth = maxX
 		a.lastHeight = maxY
+		// The pane geometry changed: the no-scrollback verdict no longer
+		// describes the current screen.
+		a.fullscreenNoScrollback = false
 		blankScreen(g, maxX, maxY)
 		// The scroll viewport dimensions are tied to the pane geometry;
 		// leave scroll mode so the next entry recomputes them at the new
 		// size (the live preview resizes correctly on its own).
 		if a.scroll.IsActive() {
 			a.scroll.Exit()
+		}
+		if a.previewScroll.IsActive() {
+			a.previewScroll.Exit()
+			a.previewScrollTarget = ""
 		}
 	}
 
@@ -138,6 +163,20 @@ func (a *App) layout(g *gocui.Gui) error {
 		return err
 	}
 	return a.layoutDialog(g, maxX, maxY)
+}
+
+// setDashboardFocus gives focus to the sessions panel or the main preview
+// panel, depending on the Tab-focus state.
+func (a *App) setDashboardFocus(g *gocui.Gui) error {
+	name := "sessions"
+	if a.focusMain {
+		name = "main"
+	}
+	if _, err := g.SetCurrentView(name); err != nil && !isUnknownView(err) {
+		return err
+	}
+	g.Cursor = false
+	return nil
 }
 
 func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
@@ -170,6 +209,24 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	vlog.Clear()
 	renderLogs(vlog, a.logs)
 
+	// Version strip (bottom of the left column): the installed app version.
+	// Skipped on short terminals, where the strip is a zero rect.
+	if l.Version.Y1 > l.Version.Y0 {
+		vver, err := g.SetView("version", l.Version.X0, l.Version.Y0, l.Version.X1, l.Version.Y1, 0)
+		if err != nil && !isUnknownView(err) {
+			return err
+		}
+		setRoundedFrame(vver)
+		vver.Title = " Version "
+		vver.Clear()
+		fmt.Fprintf(vver, " %s", a.version)
+	} else {
+		// The terminal shrank below the strip threshold: a version view
+		// from the taller layout would otherwise stay registered at its
+		// old coordinates, overlapping the compact panels.
+		g.DeleteView("version")
+	}
+
 	// Main panel (right side) — live preview of the selected session
 	v3, err := g.SetView("main", l.Main.X0, l.Main.Y0, l.Main.X1, l.Main.Y1, 0)
 	if err != nil && !isUnknownView(err) {
@@ -179,7 +236,17 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	v3.Wrap = false
 	v3.Editable = false
 	v3.Clear()
-	a.renderPreview(v3)
+	if a.previewScroll.IsActive() {
+		// Browsing must not stop observing the pane: the capture tick keeps
+		// live captures (and the synthetic-buffer feeds) running while the
+		// frozen snapshot is shown.
+		if sess := a.currentSession(); sess != nil {
+			a.previewCaptureTick(v3, sess)
+		}
+		a.renderPreviewScroll(v3)
+	} else {
+		a.renderPreview(v3)
+	}
 
 	// Options bar (bottom, frameless): keybinding hints
 	v4, err := g.SetView("options", l.Options.X0, l.Options.Y0, l.Options.X1, l.Options.Y1, 0)
@@ -188,14 +255,13 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	}
 	v4.Frame = false
 	v4.Clear()
-	renderOptionsBar(v4)
+	a.renderOptionsBar(v4)
 
-	// Focus priority: dialog > sessions panel.
+	// Focus priority: dialog > (Tab-focus state: main panel or sessions).
 	if a.dialog == DialogNone {
-		if _, err := g.SetCurrentView("sessions"); err != nil && !isUnknownView(err) {
+		if err := a.setDashboardFocus(g); err != nil && !isUnknownView(err) {
 			return err
 		}
-		g.Cursor = false
 	}
 	return nil
 }
@@ -207,6 +273,7 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	// Remove split-panel views so only the fullscreen view remains.
 	g.DeleteView("sessions")
 	g.DeleteView("logs")
+	g.DeleteView("version")
 	g.DeleteView("options")
 
 	v, err := g.SetView("main", 0, 0, maxX-1, maxY-2, 0)
@@ -228,6 +295,11 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	v.Clear()
 	a.resizeFullScreenTarget(v)
 	if a.scroll.IsActive() {
+		// Same as the dashboard preview: keep live captures (and the
+		// synthetic buffer) fed while the scroll snapshot is shown.
+		if sess := a.currentSession(); sess != nil {
+			a.previewCaptureTick(v, sess)
+		}
 		a.renderScrollContent(v)
 	} else {
 		a.renderPreview(v)
@@ -249,6 +321,18 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 			presentation.StyledKey("ctrl+o", "eof")+"  "+
 			presentation.StyledKey("ctrl+v", "scroll")+"  "+
 			presentation.StyledKey("ctrl+\\", "back"))
+		// The pane's program keeps its own scrollback (alternate screen):
+		// the wheel goes to the program, lazytmux has nothing to browse.
+		if a.fullscreenNoScrollback {
+			a.buffersMu.Lock()
+			currentPane := a.paneIDs[a.fullscreen.Target()]
+			a.buffersMu.Unlock()
+			// The verdict goes stale the moment the synthetic buffer gains
+			// history — the badge must not keep claiming otherwise.
+			if currentPane == a.fullscreenNoScrollbackPane && !a.bufferHasHistory(a.fullscreen.Target()) {
+				fmt.Fprint(v2, "  "+presentation.Dim+"no scrollback"+presentation.Reset)
+			}
+		}
 	}
 
 	g.Cursor = true
@@ -413,9 +497,7 @@ func (a *App) closeCreateDialog(g *gocui.Gui) {
 	}
 	g.DeleteView("create-hint")
 	g.Cursor = false
-	if _, err := g.SetCurrentView("sessions"); err != nil && !isUnknownView(err) {
-		_ = err
-	}
+	_ = a.setDashboardFocus(g)
 }
 
 // Rename dialog: single input prefilled with the current session name.
@@ -445,9 +527,7 @@ func (a *App) closeRenameDialog(g *gocui.Gui) {
 	a.renameTarget = ""
 	g.DeleteView("rename-input")
 	g.Cursor = false
-	if _, err := g.SetCurrentView("sessions"); err != nil && !isUnknownView(err) {
-		_ = err
-	}
+	_ = a.setDashboardFocus(g)
 }
 
 // Confirm-delete dialog: asks y/n before killing a session.
@@ -474,9 +554,7 @@ func (a *App) closeConfirmDeleteDialog(g *gocui.Gui) {
 	a.dialog = DialogNone
 	a.confirmTarget = ""
 	g.DeleteView("confirm-delete")
-	if _, err := g.SetCurrentView("sessions"); err != nil && !isUnknownView(err) {
-		_ = err
-	}
+	_ = a.setDashboardFocus(g)
 }
 
 // createFieldViews are the gocui view names of the create dialog fields,

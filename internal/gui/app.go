@@ -7,7 +7,9 @@ package gui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,13 +50,21 @@ const fullscreenStaleAfter = 100 * time.Millisecond
 type App struct {
 	g          *gocui.Gui
 	svc        session.Provider
+	version    string // the installed app version, shown in the Version panel
 	sessions   []session.Info // cached session list, refreshed periodically
 	cursor     int            // selected session index
 	preview    *PreviewCache
 	fullscreen *FullScreenState
 	scroll     *ScrollState
 	editor     *inputEditor // fullscreen key-forwarding editor (lazily created)
-	dialog     DialogKind
+	// Dashboard preview scrolling: a second ScrollState instance (same frozen
+	// snapshot model as fullscreen scroll mode) plus the session it belongs
+	// to and the Tab-focus state.
+	previewScroll         *ScrollState
+	previewScrollTarget   string
+	previewScrollTargetID string // tmux ID of the session the snapshot belongs to
+	focusMain             bool   // dashboard focus: true = main preview panel, false = sessions
+	dialog                DialogKind
 	// createField is the active input field of the create dialog
 	// (0=name, 1=directory, 2=command).
 	createField    int
@@ -64,11 +74,38 @@ type App struct {
 	lastHeight     int
 	lastFullscreen bool   // fullscreen state at the previous layout cycle
 	lastResizeName string // session whose window was last resized for fullscreen
-	lastResizeW    int    // and the size it was resized to
-	lastResizeH    int
-	logs           []logEntry  // recent status/error messages, shown in the logs panel
-	refreshBusy    atomic.Bool // true while a background session refresh is in flight
-	attachTarget   string      // session to attach to; set on Enter, main() acts on it
+	// fullscreenNoScrollback marks the fullscreen target's pane as having no
+	// tmux scrollback history (alternate-screen programs like Claude Code),
+	// so the status bar can say so and the wheel forwards to the pane.
+	fullscreenNoScrollback     bool
+	fullscreenNoScrollbackPane string     // the pane the verdict belongs to (a pane change hides it)
+	fullscreenIdent            string     // identity of the fullscreen target (a recreation must drop scroll mode)
+	fsMu                       sync.Mutex // serializes wheel injection with fullscreen transitions
+	lastResizeW                int        // and the size it was resized to
+	lastResizeH                int
+	logs                       []logEntry  // recent status/error messages, shown in the logs panel
+	refreshBusy                atomic.Bool // true while a background session refresh is in flight
+	attachTarget               string      // session to attach to; set on Enter, main() acts on it
+	buffers                    map[string]*LineBuffer
+	bufferIDs                  map[string]string // buffer name -> "ID@Created@PID" identity it belongs to
+	bufferIdentities           map[string]string // buffer name -> the session identity it was fed under
+	paneIDs                    map[string]string // session name -> the active pane the buffer/preview belong to
+	paneSeq                    map[string]uint64 // session -> the capture sequence that last recorded its pane
+	sessionIdentities          map[string]string // session name -> identity, updated every refresh
+	bufferGens                 map[string]uint64 // generation the buffer was last fed under
+	buffersMu                  sync.Mutex        // guards the buffers map (LineBuffer locks itself)
+	sessionGen                 atomic.Uint64
+	captureSeq                 atomic.Uint64 // monotonically increasing capture identity
+	lastSessionSig             string        // name=ID signature of the last applied refresh
+
+	// scrollHint is the transient preview-title hint shown after a scroll
+	// attempt on a session that keeps its own scrollback (alternate-screen
+	// programs like Claude Code): "press Enter to open it and scroll inside".
+	scrollHintName  string
+	scrollHintIdent string // session identity (ID@Created) the hint belongs to
+	scrollHintPane  string // the pane the hint belongs to (a pane change invalidates it)
+	scrollHintMsg   string // the message shown (depends on whether scrolling inside is possible)
+	scrollHintUntil time.Time
 }
 
 // logEntry is one line in the logs panel.
@@ -81,9 +118,9 @@ type logEntry struct {
 // maxLogEntries caps the in-memory log.
 const maxLogEntries = 100
 
-// NewApp creates an App for the given session provider. Call Run() to start
-// the event loop.
-func NewApp(svc session.Provider) (*App, error) {
+// NewApp creates an App for the given session provider and installed
+// version. Call Run() to start the event loop.
+func NewApp(svc session.Provider, version string) (*App, error) {
 	g, err := gocui.NewGui(gocui.NewGuiOpts{
 		OutputMode:      gocui.OutputTrue,
 		SupportOverlaps: true,
@@ -91,7 +128,7 @@ func NewApp(svc session.Provider) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init gocui: %w", err)
 	}
-	return newApp(g, svc)
+	return newApp(g, svc, version)
 }
 
 // NewAppHeadless creates an App in headless mode for testing.
@@ -105,16 +142,25 @@ func NewAppHeadless(svc session.Provider, width, height int) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init gocui headless: %w", err)
 	}
-	return newApp(g, svc)
+	return newApp(g, svc, "")
 }
 
-func newApp(g *gocui.Gui, svc session.Provider) (*App, error) {
+func newApp(g *gocui.Gui, svc session.Provider, version string) (*App, error) {
 	app := &App{
-		g:          g,
-		svc:        svc,
-		preview:    &PreviewCache{},
-		fullscreen: &FullScreenState{},
-		scroll:     &ScrollState{},
+		g:                 g,
+		svc:               svc,
+		version:           version,
+		preview:           &PreviewCache{},
+		fullscreen:        &FullScreenState{},
+		scroll:            &ScrollState{},
+		previewScroll:     &ScrollState{},
+		buffers:           make(map[string]*LineBuffer),
+		bufferIDs:         make(map[string]string),
+		bufferGens:        make(map[string]uint64),
+		bufferIdentities:  make(map[string]string),
+		paneIDs:           make(map[string]string),
+		paneSeq:           make(map[string]uint64),
+		sessionIdentities: make(map[string]string),
 	}
 
 	g.Highlight = true
@@ -240,6 +286,110 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 	}
 	a.sessions = sessions
 
+	// Invalidate in-flight captures and drop synthetic scrollback buffers of
+	// sessions that no longer exist, under one lock. Captures check their
+	// generation under the same lock before feeding (feedBufferIfCurrent),
+	// so a refresh can never interleave between the check and the feed —
+	// which would recreate a pruned buffer with stale content.
+	//
+	// Buffers are also bound to the session's stable tmux ID: a session
+	// killed and recreated under the same name between refreshes gets a
+	// fresh buffer instead of inheriting the old pane's scrollback.
+	// Lock order is fsMu -> buffersMu everywhere; the bump is serialized
+	// with fsMu so a wheel forward (which holds fsMu across its check and
+	// the send) can never race a recreate.
+	a.fsMu.Lock()
+	a.buffersMu.Lock()
+	// Invalidate in-flight captures only when the session identity landscape
+	// changed — an ordinary poll must not starve captures that run longer
+	// than one refresh interval on a slow tmux server.
+	if sig := sessionListSig(sessions); sig != a.lastSessionSig {
+		a.lastSessionSig = sig
+		a.sessionGen.Add(1)
+		// The per-target fullscreen caches are keyed by name: a same-name
+		// recreation must not inherit the dead pane's verdicts or skip the
+		// replacement window's resize, and an already-loaded scroll mode
+		// must not keep showing the old session's frozen snapshot.
+		a.lastResizeName = ""
+		a.fullscreenNoScrollback = false
+		if a.fullscreen.IsActive() {
+			for _, s := range a.sessions {
+				if s.Name == a.fullscreen.Target() {
+					if ident := sessionIdentity(s); a.fullscreenIdent != "" && ident != a.fullscreenIdent {
+						a.fullscreenIdent = ident
+						a.scroll.Exit()
+					}
+					break
+				}
+			}
+		}
+	}
+	for name := range a.buffers {
+		found := false
+		for _, s := range a.sessions {
+			if s.Name == name {
+				found = true
+				// Buffers are bound to the (ID, Created) identity — tmux
+				// recycles IDs after a server restart. A bound buffer
+				// belongs to a dead incarnation when its identity changed.
+				// An UNBOUND buffer (fed between polls) may only adopt the
+				// current identity if it was fed under the current
+				// generation — otherwise it holds the previous
+				// incarnation's output and is dropped.
+				identity := sessionIdentity(s)
+				// A bound buffer belongs to a dead incarnation when its
+				// identity changed. An UNBOUND buffer is dropped only when
+				// THIS session's identity changed since the feed — an
+				// unrelated session appearing or vanishing must not destroy
+				// the selected session's history.
+				if (a.bufferIDs[name] != "" && a.bufferIDs[name] != identity) ||
+					(a.bufferIDs[name] == "" && a.bufferIdentities[name] != "" && a.bufferIdentities[name] != identity) {
+					a.dropBufferLocked(name)
+					delete(a.paneIDs, name)
+					delete(a.paneSeq, name)
+				} else {
+					a.bufferIDs[name] = identity
+				}
+				break
+			}
+		}
+		if !found {
+			a.dropBufferLocked(name)
+			delete(a.paneIDs, name)
+			delete(a.paneSeq, name)
+		}
+	}
+	// Pane metadata prunes independently of buffers: a recreated session
+	// (or one whose old captures never created a buffer) must not keep its
+	// predecessor's pane ID, or wheel validation would reject the new pane
+	// until another live capture happens.
+	for name := range a.paneIDs {
+		found := false
+		for _, s := range a.sessions {
+			if s.Name == name {
+				found = true
+				if a.sessionIdentities[name] != "" && a.sessionIdentities[name] != sessionIdentity(s) {
+					delete(a.paneIDs, name)
+					delete(a.paneSeq, name)
+				}
+				break
+			}
+		}
+		if !found {
+			delete(a.paneIDs, name)
+			delete(a.paneSeq, name)
+		}
+	}
+	// Rebuild the identity map from THIS refresh: historical names must not
+	// accumulate forever. The pane-change checks above already consumed the
+	// previous values, and feeds bind themselves to the current ones.
+	a.sessionIdentities = make(map[string]string, len(a.sessions))
+	for _, s := range a.sessions {
+		a.sessionIdentities[s.Name] = sessionIdentity(s)
+	}
+	a.buffersMu.Unlock()
+	a.fsMu.Unlock()
+
 	// Leave fullscreen automatically when the target session disappeared
 	// (e.g. its shell exited, or it was killed elsewhere).
 	if a.fullscreen.IsActive() {
@@ -263,6 +413,24 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 			}
 		}
 	}
+
+	// The preview snapshot is tied to a session; when the selection no longer
+	// points at it (killed, renamed, or the list reshuffled), return to the
+	// live capture. A name comparison keeps this a no-op during the regular
+	// 300ms refresh ticks while browsing.
+	if a.previewScroll.IsActive() {
+		cur, curID := "", ""
+		if sess := a.currentSession(); sess != nil {
+			cur = sess.Name
+			curID = sessionIdentity(*sess)
+		}
+		if cur != a.previewScrollTarget || curID != a.previewScrollTargetID {
+			a.previewScroll.Exit()
+			a.previewScrollTarget = ""
+			a.previewScrollTargetID = ""
+			a.preview.Invalidate()
+		}
+	}
 }
 
 // enterFullScreen switches the UI to fullscreen passthrough mode for the
@@ -272,15 +440,30 @@ func (a *App) enterFullScreen() {
 	if sess == nil {
 		return
 	}
+	a.fsMu.Lock()
 	a.scroll.Exit()
+	a.previewScroll.Exit()
+	a.previewScrollTarget = ""
+	a.previewScrollTargetID = ""
+	a.fullscreenNoScrollback = false
+	a.scrollHintName = ""
+	a.scrollHintIdent = ""
+	a.scrollHintMsg = ""
+	a.scrollHintUntil = time.Time{}
 	a.preview.Invalidate()
+	a.fullscreenIdent = sessionIdentity(*sess)
 	a.fullscreen.Enter(sess.Name)
+	a.fsMu.Unlock()
 }
 
 // exitFullScreen returns to the dashboard layout.
 func (a *App) exitFullScreen() {
+	a.fsMu.Lock()
+	defer a.fsMu.Unlock()
 	a.scroll.Exit()
 	a.fullscreen.Exit()
+	a.fullscreenNoScrollback = false
+	a.fullscreenIdent = ""
 	a.preview.Invalidate()
 }
 
@@ -307,13 +490,21 @@ func (a *App) clampCursor() {
 }
 
 // moveCursor moves the selection by delta and marks the preview stale so it
-// refreshes for the newly selected session.
+// refreshes for the newly selected session. Moving to a different session
+// returns the preview panel to its live capture; a clamped no-op (k at the
+// first session, j at the last) does not, since the selection did not change.
 func (a *App) moveCursor(delta int) {
 	if len(a.sessions) == 0 {
 		return
 	}
+	before := a.cursor
 	a.cursor += delta
 	a.clampCursor()
+	if a.cursor != before && a.previewScroll.IsActive() {
+		a.previewScroll.Exit()
+		a.previewScrollTarget = ""
+		a.previewScrollTargetID = ""
+	}
 	a.preview.Invalidate()
 }
 
@@ -327,9 +518,134 @@ func (a *App) setError(msg string) {
 	a.appendLog(logEntry{at: time.Now(), msg: msg, isErr: true})
 }
 
+// scrollBufferCap bounds each session's synthetic scrollback buffer (the
+// user asked for "a couple of hundred lines"; 400 is comfortably within
+// memory limits at pane-line sizes).
+const scrollBufferCap = 400
+
+// feedBuffer appends one full-pane capture to the session's synthetic
+// scrollback buffer, creating it on first use.
+func (a *App) feedBuffer(name, content string) {
+	if name == "" || content == "" {
+		return
+	}
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	a.feedBufferLocked(name, content)
+	a.bufferGens[name] = a.sessionGen.Load()
+}
+
+// feedBufferIfCurrent feeds the session's synthetic buffer only if the
+// session generation still matches. The check and the feed run under the
+// same lock that applySessionRefresh holds while bumping the generation and
+// pruning buffers, so a refresh cannot interleave between them (a stale
+// completion would otherwise recreate a pruned buffer).
+func (a *App) feedBufferIfCurrent(name string, gen uint64, paneID, content string) {
+	if name == "" || content == "" {
+		return
+	}
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	if a.sessionGen.Load() != gen {
+		return
+	}
+	// The capture belongs to a specific pane: if the binding moved on while
+	// it was in flight, its content must not enter the new pane's history.
+	if paneID != "" && a.paneIDs[name] != "" && a.paneIDs[name] != paneID {
+		return
+	}
+	a.feedBufferLocked(name, content)
+	a.bufferGens[name] = gen
+}
+
+// feedBufferLocked feeds the buffer without taking the map lock — the caller
+// holds it.
+func (a *App) feedBufferLocked(name, content string) {
+	if a.buffers == nil {
+		a.buffers = make(map[string]*LineBuffer)
+	}
+	b := a.buffers[name]
+	if b == nil {
+		// A fresh buffer starts unbound, bound to the session identity the
+		// last refresh observed — any lingering binding from a previous
+		// incarnation would otherwise get the buffer deleted on the next
+		// refresh.
+		delete(a.bufferIDs, name)
+		a.bufferIdentities[name] = a.sessionIdentities[name]
+		b = NewLineBuffer(scrollBufferCap)
+		a.buffers[name] = b
+	}
+	b.Feed(content)
+}
+
+// dropBufferLocked removes the session's synthetic buffer and every piece of
+// identity metadata attached to it. The caller holds buffersMu. Every pane
+// rebind and refresh prune goes through here — the identity map must never
+// retain orphans for names that no longer have a buffer, because pruning
+// iterates buffers and could not reclaim them later.
+func (a *App) dropBufferLocked(name string) {
+	delete(a.buffers, name)
+	delete(a.bufferIDs, name)
+	delete(a.bufferGens, name)
+	delete(a.bufferIdentities, name)
+}
+
+// bufferFor returns the session's synthetic scrollback buffer, creating an
+// empty one on first use. The map is guarded; the LineBuffer locks itself.
+func (a *App) bufferFor(name string) *LineBuffer {
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	if a.buffers == nil {
+		a.buffers = make(map[string]*LineBuffer)
+	}
+	b := a.buffers[name]
+	if b == nil {
+		b = NewLineBuffer(scrollBufferCap)
+		a.buffers[name] = b
+	}
+	return b
+}
+
+// bufferLookup returns the session's synthetic scrollback buffer without
+// creating one, or nil.
+func (a *App) bufferLookup(name string) *LineBuffer {
+	a.buffersMu.Lock()
+	defer a.buffersMu.Unlock()
+	return a.buffers[name]
+}
+
+// sessionIdentity is the stable identity of a session incarnation: tmux
+// recycles IDs after a server restart, and Created has second granularity,
+// so the server PID — which changes on every restart — is part of it.
+func sessionIdentity(s session.Info) string {
+	return s.ID + "@" + strconv.FormatInt(s.Created, 10) + "@" + strconv.FormatInt(s.ServerPID, 10)
+}
+
+// sessionListSig is a cheap identity signature of the session list: the
+// name=identity pairs joined in list order (the service sorts by name, so
+// the order is stable). It changes exactly when a session appears,
+// disappears, is renamed, or is recreated — the events that invalidate
+// in-flight captures.
+func sessionListSig(sessions []session.Info) string {
+	var sb strings.Builder
+	for _, s := range sessions {
+		sb.WriteString(s.Name)
+		sb.WriteByte('=')
+		sb.WriteString(sessionIdentity(s))
+		sb.WriteByte(';')
+	}
+	return sb.String()
+}
+
 // appendLog adds an entry to the log, trimming the oldest entries when the
-// log grows past maxLogEntries.
+// log grows past maxLogEntries. A message identical to the previous one
+// (e.g. the no-scrollback note on every wheel gesture) refreshes the
+// timestamp instead of stacking duplicates.
 func (a *App) appendLog(e logEntry) {
+	if n := len(a.logs); n > 0 && a.logs[n-1].msg == e.msg && a.logs[n-1].isErr == e.isErr {
+		a.logs[n-1].at = e.at
+		return
+	}
 	a.logs = append(a.logs, e)
 	if len(a.logs) > maxLogEntries {
 		a.logs = a.logs[len(a.logs)-maxLogEntries:]

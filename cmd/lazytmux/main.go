@@ -54,7 +54,7 @@ func run() error {
 	svc := session.NewService(tmux.NewExecClient())
 
 	for {
-		app, err := gui.NewApp(svc)
+		app, err := gui.NewApp(svc, update.ReleaseVersion(version))
 		if err != nil {
 			return fmt.Errorf("init TUI: %w", err)
 		}

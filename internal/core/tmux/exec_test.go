@@ -173,19 +173,189 @@ func TestPrependSocket(t *testing.T) {
 func TestCaptureHistoryPreservesBlankLines(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "fake-tmux")
-	// Prints two blank lines, "x", then two blank lines. The leading and
-	// trailing blanks are significant for the snapshot's line accounting.
-	script := "#!/bin/sh\nfor f in \"$@\"; do :; done\necho; echo; echo x; echo; echo\n"
+	// Prints two blank lines, "x", two blank lines, then the pane-height line
+	// that the display-message half of the combined command produces. The
+	// leading and trailing blanks are significant for the snapshot's line
+	// accounting.
+	script := "#!/bin/sh\nfor f in \"$@\"; do :; done\necho; echo; echo x; echo; echo; echo 63\n"
 	require.NoError(t, os.WriteFile(fake, []byte(script), 0o755))
 
 	c := &ExecClient{tmuxBin: fake}
 
-	content, err := c.CapturePaneANSIHistory(context.Background(), "s")
+	content, paneH, _, err := c.CapturePaneANSIHistory(context.Background(), "s")
 	require.NoError(t, err)
 	assert.Equal(t, "\n\nx\n\n\n", content, "history captures must preserve blank lines")
+	assert.Equal(t, 63, paneH, "the trailing pane-height line is parsed separately")
 
 	trimmed, err := c.run(context.Background(), "display-message", "-p", "x")
 	require.NoError(t, err)
-	assert.Equal(t, "\n\nx\n\n\n", content, "sanity: raw output unchanged")
-	assert.Equal(t, "x", trimmed, "run() still trims for parsed commands")
+	assert.Equal(t, "x\n\n\n63", trimmed, "run() trims the fixture's surrounding whitespace")
+}
+
+func TestSplitPaneHeightLine(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		in      string
+		content string
+		height  int
+		wantErr bool
+	}{
+		{
+			name:    "content with trailing height line",
+			in:      "line1\nline2\n63\n",
+			content: "line1\nline2\n",
+			height:  63,
+		},
+		{
+			name:    "blank lines preserved",
+			in:      "\n\nx\n\n\n63\n",
+			content: "\n\nx\n\n\n",
+			height:  63,
+		},
+		{
+			name:    "no height line",
+			in:      "only content\n",
+			wantErr: true,
+		},
+		{
+			name:    "non-numeric height",
+			in:      "content\nabc\n",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, h, _, err := splitPaneHeightLine(tt.in)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.content, content)
+			assert.Equal(t, tt.height, h)
+		})
+	}
+}
+
+func TestParseInputFlags(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		in      string
+		alt     bool
+		mouse   bool
+		cx, cy  int
+		wantErr bool
+	}{
+		{name: "alt screen with SGR mouse", in: "1 1 1 12 34 %7", alt: true, mouse: true, cx: 12, cy: 34},
+		{name: "plain pane", in: "0 0 0 0 0 %2", alt: false, mouse: false, cx: 0, cy: 0},
+		{name: "alt without any mouse", in: "1 0 0 5 9 %3", alt: true, mouse: false, cx: 5, cy: 9},
+		{name: "SGR encoding without tracking", in: "1 0 1 5 9 %4", alt: true, mouse: false, cx: 5, cy: 9},
+		{name: "tracking without SGR encoding", in: "1 1 0 5 9 %5", alt: true, mouse: false, cx: 5, cy: 9},
+		{name: "empty", in: "", wantErr: true},
+		{name: "too few fields", in: "1 1", wantErr: true},
+		{name: "non-numeric", in: "x 1 2 3", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			alt, mouse, cx, cy, paneID, err := parseInputFlags(tt.in)
+			_ = paneID
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.alt, alt)
+			assert.Equal(t, tt.mouse, mouse)
+			assert.Equal(t, tt.cx, cx)
+			assert.Equal(t, tt.cy, cy)
+		})
+	}
+}
+
+func TestSGRWheel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		up   bool
+		x, y int
+		want string
+	}{
+		{
+			name: "wheel up at 0-based coords",
+			up:   true,
+			x:    10, y: 5,
+			want: "\x1b[<64;11;6M",
+		},
+		{
+			name: "wheel down at origin",
+			up:   false,
+			x:    0, y: 0,
+			want: "\x1b[<65;1;1M",
+		},
+		{
+			name: "negative coords clamp to one",
+			up:   true,
+			x:    -5, y: -3,
+			want: "\x1b[<64;1;1M",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sgrWheel(tt.up, tt.x, tt.y))
+		})
+	}
+}
+
+func TestSplitCursorPair(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		in      string
+		content string
+		cx, cy  int
+	}{
+		{
+			name:    "full screen without blank row",
+			in:      "r1\nr2\nr3\n10,14 %9\n",
+			content: "r1\nr2\nr3",
+			cx:      10, cy: 14,
+		},
+		{
+			name:    "blank last row preserved",
+			in:      "r1\nr2\n\n10,14 %9\n",
+			content: "r1\nr2\n",
+			cx:      10, cy: 14,
+		},
+		{
+			name:    "no cursor line",
+			in:      "r1\nr2\n",
+			content: "r1\nr2",
+			cx:      0, cy: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, cx, cy, _ := splitCursorPair(tt.in)
+			assert.Equal(t, tt.content, content)
+			assert.Equal(t, tt.cx, cx)
+			assert.Equal(t, tt.cy, cy)
+		})
+	}
+}
+
+func TestParseSessionsWithServerPID(t *testing.T) {
+	t.Parallel()
+	in := "devbox\t$4\t/home/u\t1\t2\t1789610227\t1849982\nlogs\t$1\t/var/log\t0\t1\t1789573550\t1849982"
+	sessions := parseSessions(in)
+	require.Len(t, sessions, 2)
+	assert.Equal(t, SessionInfo{
+		Name: "devbox", ID: "$4", Path: "/home/u", Attached: true, Windows: 2,
+		Created: 1789610227, ServerPID: 1849982,
+	}, sessions[0], "the seventh field is the server incarnation PID")
+	assert.Equal(t, SessionInfo{
+		Name: "logs", ID: "$1", Path: "/var/log", Attached: false, Windows: 1,
+		Created: 1789573550, ServerPID: 1849982,
+	}, sessions[1])
 }

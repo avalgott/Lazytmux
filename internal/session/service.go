@@ -18,12 +18,18 @@ import (
 	"github.com/avalgott/Lazytmux/internal/core/tmux"
 )
 
-// Info is a read-only view of a tmux session for display.
+// Info is a read-only view of a tmux session for display. ID is tmux's
+// session ID, Created its creation time, and ServerPID the tmux server
+// incarnation — names, IDs, and even creation seconds can be reused after
+// a restart, so the full triple is the stable identity.
 type Info struct {
-	Name     string
-	Path     string
-	Attached bool
-	Windows  int
+	Name      string
+	ID        string
+	Created   int64
+	ServerPID int64 // the tmux server incarnation (IDs recycle across restarts)
+	Path      string
+	Attached  bool
+	Windows   int
 }
 
 // CreateOpts configures a new tmux session.
@@ -33,11 +39,17 @@ type CreateOpts struct {
 	Command string // command to run; empty = the user's normal shell
 }
 
-// Preview holds captured pane content and cursor position.
+// Preview holds captured pane content and cursor position. PaneHeight is the
+// pane's height at capture time — for a whole-history capture it separates
+// real scrollback from a snapshot that contains nothing beyond the visible
+// screen (alternate-screen panes have no saved history).
 type Preview struct {
-	Content string
-	CursorX int
-	CursorY int
+	Content    string
+	Full       string // raw full-pane capture (untruncated, unwindowed)
+	CursorX    int
+	CursorY    int
+	PaneID     string // the tmux pane the capture came from (%N)
+	PaneHeight int
 }
 
 // Provider abstracts session operations for the GUI layer.
@@ -49,8 +61,19 @@ type Provider interface {
 	Capture(ctx context.Context, name string, width, height int) (Preview, error)
 	// CaptureScrollback captures the session's whole pane history — from
 	// tmux's oldest-history sentinel to the current bottom — in one atomic
-	// tmux operation, with ANSI escape codes.
+	// tmux operation, with ANSI escape codes and the pane height.
 	CaptureScrollback(ctx context.Context, name string) (Preview, error)
+	// PaneInputFlags reports the active pane's input mode: alternate screen
+	// active, SGR (1006) mouse tracking enabled, and the 0-based cursor
+	// position. The GUI uses it to decide whether the wheel should go to the
+	// pane's program (which handles its own scrolling) or to lazytmux scroll
+	// mode — SGR is the only wheel encoding it emits.
+	PaneInputFlags(ctx context.Context, name string) (altOn, sgrMouse bool, cursorX, cursorY int, paneID string, err error)
+	// ForwardMouseWheel sends a mouse wheel event to the pane's input
+	// stream at the given 0-based pane-relative mouse coordinates (not the
+	// pane's cursor position — SGR consumers pick the hovered widget from
+	// them).
+	ForwardMouseWheel(ctx context.Context, name string, up bool, cursorX, cursorY int) error
 	// SendKeys sends tmux key names (e.g. "Enter", "Up", "C-c") to the
 	// session's active pane. Used by fullscreen passthrough mode.
 	SendKeys(ctx context.Context, name string, keys ...string) error
@@ -98,10 +121,13 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 	infos := make([]Info, len(sessions))
 	for i, sess := range sessions {
 		infos[i] = Info{
-			Name:     sess.Name,
-			Path:     sess.Path,
-			Attached: sess.Attached,
-			Windows:  sess.Windows,
+			Name:      sess.Name,
+			ID:        sess.ID,
+			Created:   sess.Created,
+			ServerPID: sess.ServerPID,
+			Path:      sess.Path,
+			Attached:  sess.Attached,
+			Windows:   sess.Windows,
 		}
 	}
 	sort.Slice(infos, func(i, j int) bool {
@@ -228,7 +254,7 @@ func (s *Service) Rename(ctx context.Context, name, newName string) error {
 // cursor are fetched atomically so the rendered cursor never disagrees with
 // the rendered content.
 func (s *Service) Capture(ctx context.Context, name string, width, height int) (Preview, error) {
-	content, cursorX, cursorY, err := s.tmux.CapturePaneANSIWithCursor(ctx, name)
+	content, cursorX, cursorY, paneID, err := s.tmux.CapturePaneANSIWithCursor(ctx, name)
 	if err != nil {
 		return Preview{}, err
 	}
@@ -258,19 +284,31 @@ func (s *Service) Capture(ctx context.Context, name string, width, height int) (
 
 	return Preview{
 		Content: strings.Join(lines, "\n"),
+		Full:    content,
 		CursorX: cursorX,
 		CursorY: cursorY,
+		PaneID:  paneID,
 	}, nil
 }
 
 // CaptureScrollback captures the session's whole pane history in one
 // atomic tmux operation.
 func (s *Service) CaptureScrollback(ctx context.Context, name string) (Preview, error) {
-	content, err := s.tmux.CapturePaneANSIHistory(ctx, name)
+	content, paneH, paneID, err := s.tmux.CapturePaneANSIHistory(ctx, name)
 	if err != nil {
 		return Preview{}, err
 	}
-	return Preview{Content: content}, nil
+	return Preview{Content: content, PaneHeight: paneH, PaneID: paneID}, nil
+}
+
+// PaneInputFlags reports the active pane's input mode.
+func (s *Service) PaneInputFlags(ctx context.Context, name string) (bool, bool, int, int, string, error) {
+	return s.tmux.PaneInputFlags(ctx, name)
+}
+
+// ForwardMouseWheel sends a mouse wheel event to the pane's input stream.
+func (s *Service) ForwardMouseWheel(ctx context.Context, name string, up bool, cursorX, cursorY int) error {
+	return s.tmux.SendMouseWheel(ctx, name, up, cursorX, cursorY)
 }
 
 // SendKeys sends tmux key names to the session's active pane.
