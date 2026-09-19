@@ -403,8 +403,8 @@ func (a *App) wheelHandlerAt(delta, x, y int) {
 
 func (a *App) wheel(delta, x, y int, hasPos bool) {
 	if a.fullscreen.IsActive() {
-		// The scroll-state check, the pane validation, and the forward are
-		// one fsMu section — recordPaneLocked rebinds the pane under the
+		// The scroll-state check, the pane query/adoption, and the forward
+		// are one fsMu section — recordPaneLocked rebinds the pane under the
 		// same lock, so a rebind can never race the injection. The lock is
 		// released before the scroll fallback (enterScrollMode takes it).
 		a.fsMu.Lock()
@@ -424,16 +424,32 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 				ctx, cancel := context.WithTimeout(context.Background(), wheelTmuxTimeout)
 				alt, sgr, cx, cy, pane, ferr := a.svc.PaneInputFlags(ctx, target)
 				if ferr == nil && alt && sgr {
-					a.buffersMu.Lock()
-					recorded := a.paneIDs[target]
-					a.buffersMu.Unlock()
-					if recorded == "" || recorded == pane {
-						cx, cy = x, y
-						sendTarget := target
-						if pane != "" {
-							sendTarget = pane
+					// The synchronous query is authoritative: it resolved the
+					// target to its current active pane at dispatch time, and
+					// fsMu serializes it against every internal rebind. A
+					// recorded binding from before a pane switch must not
+					// divert the wheel into scroll mode — adopt the queried
+					// pane (dropping the old pane's buffer, like a capture
+					// that observes the switch) and send to it, so the first
+					// wheel after a switch still forwards.
+					cx, cy = x, y
+					if pane != "" {
+						a.buffersMu.Lock()
+						if a.paneIDs[target] != pane {
+							delete(a.buffers, target)
+							delete(a.bufferIDs, target)
+							delete(a.bufferGens, target)
+							a.paneIDs[target] = pane
+							a.paneSeq[target] = a.captureSeq.Add(1)
 						}
-						if werr := a.svc.ForwardMouseWheel(ctx, sendTarget, delta < 0, cx, cy); werr == nil {
+						a.buffersMu.Unlock()
+						if werr := a.svc.ForwardMouseWheel(ctx, pane, delta < 0, cx, cy); werr == nil {
+							forwarded = true
+						}
+					} else {
+						// No pane ID (pre-pane_id tmux): the flags describe
+						// the current pane; send by name.
+						if werr := a.svc.ForwardMouseWheel(ctx, target, delta < 0, cx, cy); werr == nil {
 							forwarded = true
 						}
 					}

@@ -2534,6 +2534,31 @@ func TestWheelForwardsSynchronously(t *testing.T) {
 	assert.Equal(t, wheelCall{name: "%5", up: true, x: 12, y: 7}, p.wheelSnapshot()[0])
 }
 
+func TestWheelAdoptsPaneAfterSwitch(t *testing.T) {
+	p := &fakeProvider{altOn: true, sgrMouse: true, paneID: "%2"}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.fullscreen.Enter("devbox")
+	require.NoError(t, app.layout(app.g))
+	// The recorded binding still names the previous pane, and it owns a
+	// synthetic buffer: the authoritative wheel-time query must adopt %2
+	// and forward instead of diverting the first wheel into scroll mode.
+	app.buffersMu.Lock()
+	app.paneIDs["devbox"] = "%1"
+	app.buffers["devbox"] = NewLineBuffer(scrollBufferCap)
+	app.buffersMu.Unlock()
+
+	app.wheelHandlerAt(-3, 12, 7)
+	require.Len(t, p.wheelSnapshot(), 1, "the wheel must forward to the pane the query returned")
+	assert.Equal(t, wheelCall{name: "%2", up: true, x: 12, y: 7}, p.wheelSnapshot()[0])
+	assert.False(t, app.scroll.IsActive(), "a mouse-tracking pane must not fall back to scroll mode")
+	app.buffersMu.Lock()
+	assert.Equal(t, "%2", app.paneIDs["devbox"], "the queried pane must become the recorded binding")
+	_, has := app.buffers["devbox"]
+	app.buffersMu.Unlock()
+	assert.False(t, has, "the previous pane's buffer must be dropped on adoption")
+}
+
 // --- Copilot round-49 fixes ---
 
 // --- Copilot round-50 fix ---
