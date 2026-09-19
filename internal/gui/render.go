@@ -192,9 +192,7 @@ func (a *App) recordPaneLocked(name, paneID string, cs uint64) (changed bool) {
 			return false
 		}
 		changed = true
-		delete(a.buffers, name)
-		delete(a.bufferIDs, name)
-		delete(a.bufferGens, name)
+		a.dropBufferLocked(name)
 	}
 	a.paneIDs[name] = paneID
 	a.paneSeq[name] = cs

@@ -342,10 +342,7 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 				// the selected session's history.
 				if (a.bufferIDs[name] != "" && a.bufferIDs[name] != identity) ||
 					(a.bufferIDs[name] == "" && a.bufferIdentities[name] != "" && a.bufferIdentities[name] != identity) {
-					delete(a.buffers, name)
-					delete(a.bufferIDs, name)
-					delete(a.bufferGens, name)
-					delete(a.bufferIdentities, name)
+					a.dropBufferLocked(name)
 					delete(a.paneIDs, name)
 					delete(a.paneSeq, name)
 				} else {
@@ -355,10 +352,7 @@ func (a *App) applySessionRefresh(sessions []session.Info, err error) {
 			}
 		}
 		if !found {
-			delete(a.buffers, name)
-			delete(a.bufferIDs, name)
-			delete(a.bufferGens, name)
-			delete(a.bufferIdentities, name)
+			a.dropBufferLocked(name)
 			delete(a.paneIDs, name)
 			delete(a.paneSeq, name)
 		}
@@ -580,6 +574,18 @@ func (a *App) feedBufferLocked(name, content string) {
 		a.buffers[name] = b
 	}
 	b.Feed(content)
+}
+
+// dropBufferLocked removes the session's synthetic buffer and every piece of
+// identity metadata attached to it. The caller holds buffersMu. Every pane
+// rebind and refresh prune goes through here — the identity map must never
+// retain orphans for names that no longer have a buffer, because pruning
+// iterates buffers and could not reclaim them later.
+func (a *App) dropBufferLocked(name string) {
+	delete(a.buffers, name)
+	delete(a.bufferIDs, name)
+	delete(a.bufferGens, name)
+	delete(a.bufferIdentities, name)
 }
 
 // bufferFor returns the session's synthetic scrollback buffer, creating an

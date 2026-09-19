@@ -397,9 +397,7 @@ func (a *App) settlePaneLocked(name, fetchRecorded, paneID string) bool {
 	if recorded != fetchRecorded {
 		return false // a newer capture rebound the pane — this snapshot is stale
 	}
-	delete(a.buffers, name)
-	delete(a.bufferIDs, name)
-	delete(a.bufferGens, name)
+	a.dropBufferLocked(name)
 	a.paneIDs[name] = paneID
 	// Reserve a fresh capture sequence: live captures already in flight
 	// started before this adoption and must not rebind the session back.

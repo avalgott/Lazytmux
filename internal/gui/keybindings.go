@@ -436,9 +436,7 @@ func (a *App) wheel(delta, x, y int, hasPos bool) {
 					if pane != "" {
 						a.buffersMu.Lock()
 						if a.paneIDs[target] != pane {
-							delete(a.buffers, target)
-							delete(a.bufferIDs, target)
-							delete(a.bufferGens, target)
+							a.dropBufferLocked(target)
 							a.paneIDs[target] = pane
 							a.paneSeq[target] = a.captureSeq.Add(1)
 						}

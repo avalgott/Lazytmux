@@ -2168,6 +2168,25 @@ func TestBufferResetOnActivePaneChange(t *testing.T) {
 	assert.Equal(t, []string{"pane-two-content"}, snap, "the active pane changed: the old pane's buffer must be dropped")
 }
 
+func TestRecordPaneLockedDropsIdentityMetadata(t *testing.T) {
+	app := newTestApp(t, &fakeProvider{})
+	app.sessions = []session.Info{{Name: "devbox", ID: "$1", Created: 100}}
+	app.feedBuffer("devbox", "old-pane-output")
+	app.buffersMu.Lock()
+	app.paneIDs["devbox"] = "%1"
+	app.buffersMu.Unlock()
+
+	app.fsMu.Lock()
+	app.recordPaneLocked("devbox", "%2", app.captureSeq.Add(1))
+	app.fsMu.Unlock()
+
+	assert.Nil(t, app.bufferLookup("devbox"), "the old pane's buffer must be dropped")
+	app.buffersMu.Lock()
+	_, has := app.bufferIdentities["devbox"]
+	app.buffersMu.Unlock()
+	assert.False(t, has, "the rebind must not orphan the buffer identity metadata")
+}
+
 // --- Copilot round-33 fixes ---
 
 func TestUnboundBufferKeptWhenUnrelatedSessionChanges(t *testing.T) {
@@ -2489,6 +2508,11 @@ func TestSettlePaneLockedStaleSnapshotRejected(t *testing.T) {
 	app.fsMu.Unlock()
 	assert.True(t, ok)
 
+	app.buffersMu.Lock()
+	_, has := app.bufferIdentities["devbox"]
+	app.buffersMu.Unlock()
+	assert.False(t, has, "the scroll-load adoption must drop the old buffer's identity metadata")
+
 	// ...and a snapshot fetched against "%1" is now stale.
 	app.fsMu.Lock()
 	ok = app.settlePaneLocked("devbox", "%1", "%3")
@@ -2555,8 +2579,10 @@ func TestWheelAdoptsPaneAfterSwitch(t *testing.T) {
 	app.buffersMu.Lock()
 	assert.Equal(t, "%2", app.paneIDs["devbox"], "the queried pane must become the recorded binding")
 	_, has := app.buffers["devbox"]
+	_, hasIdent := app.bufferIdentities["devbox"]
 	app.buffersMu.Unlock()
 	assert.False(t, has, "the previous pane's buffer must be dropped on adoption")
+	assert.False(t, hasIdent, "the adoption must not orphan the buffer identity metadata")
 }
 
 // --- Copilot round-49 fixes ---
