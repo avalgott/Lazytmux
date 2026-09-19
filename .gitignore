@@ -5,3 +5,5 @@ integration.test
 .DS_Store
 .reports/
 docs/
+AGENTS.md
+CLAUDE.md
