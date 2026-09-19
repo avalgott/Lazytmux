@@ -65,6 +65,15 @@ func TestServiceListNoSocketIsEmpty(t *testing.T) {
 	assert.Empty(t, infos)
 }
 
+func TestServiceListConnectFailureIsError(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.ErrListSessions = errors.New("tmux -u list-sessions: exit status 1 (stderr: error connecting to /tmp/tmux-1000/default (Permission denied))")
+
+	svc := NewService(mock)
+	_, err := svc.List(context.Background())
+	require.Error(t, err, "a connect failure other than a missing socket is a real error, not an empty list")
+}
+
 func TestServiceCreate(t *testing.T) {
 	t.Setenv("SHELL", "/bin/bash")
 	mock := tmux.NewMockClient()

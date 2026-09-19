@@ -122,12 +122,15 @@ func NewServiceWithPlan(tc tmux.Client, p *plan.Plan) *Service {
 // A missing server is mapped to an empty list rather than an error: when the
 // last session is killed the tmux server exits, and "no sessions" is the
 // state the dashboard should show (with the create hint, since n restarts
-// the server). tmux words this two ways, "no server running" for a server
-// that exited, and "error connecting to" for one that was never started.
+// the server). tmux words this two ways: "no server running" for a server
+// that exited, and "error connecting to <socket> (No such file or
+// directory)" for one that was never started. Other connect failures, like
+// a permission-denied socket, are real errors and are returned to the
+// caller.
 func (s *Service) List(ctx context.Context) ([]Info, error) {
 	sessions, err := s.tmux.ListSessions(ctx)
 	if err != nil {
-		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "error connecting to") {
+		if missingServerError(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -159,6 +162,20 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 		return strings.ToLower(infos[i].Name) < strings.ToLower(infos[j].Name)
 	})
 	return infos, nil
+}
+
+// missingServerError reports whether err is tmux saying no usable server
+// exists: "no server running" after the last session was killed, or a
+// connect failure naming a socket that does not exist (the server was never
+// started). Anything else, like a permission-denied socket, is a real
+// failure the caller must see.
+func missingServerError(err error) bool {
+	msg := err.Error()
+	if strings.Contains(msg, "no server running") {
+		return true
+	}
+	return strings.Contains(msg, "error connecting to") &&
+		strings.Contains(msg, "(No such file or directory)")
 }
 
 // ApplyPlan creates every planned session that does not already exist in
