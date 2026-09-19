@@ -1,10 +1,14 @@
 // Package session implements lazytmux's session operations on top of the
 // tmux.Client abstraction. It is stateless: tmux itself is the source of
 // truth, so sessions created outside lazytmux are discovered automatically.
+// A service may carry an immutable Session Plan (see internal/plan) as
+// startup configuration: listed sessions are annotated with plan metadata,
+// and ApplyPlan creates missing sessions once. Nothing is persisted.
 package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +20,7 @@ import (
 
 	"github.com/avalgott/Lazytmux/internal/core/shell"
 	"github.com/avalgott/Lazytmux/internal/core/tmux"
+	"github.com/avalgott/Lazytmux/internal/plan"
 )
 
 // Info is a read-only view of a tmux session for display. ID is tmux's
@@ -30,6 +35,7 @@ type Info struct {
 	Path      string
 	Attached  bool
 	Windows   int
+	Plan      *plan.Session // plan entry this session matches by name; nil = ad-hoc
 }
 
 // CreateOpts configures a new tmux session.
@@ -94,11 +100,18 @@ type Provider interface {
 // Service implements Provider using the default tmux server.
 type Service struct {
 	tmux tmux.Client
+	plan *plan.Plan
 }
 
 // NewService creates a session service backed by a tmux client.
 func NewService(tc tmux.Client) *Service {
 	return &Service{tmux: tc}
+}
+
+// NewServiceWithPlan creates a session service that annotates listed
+// sessions with the given plan and can reconcile it via ApplyPlan.
+func NewServiceWithPlan(tc tmux.Client, p *plan.Plan) *Service {
+	return &Service{tmux: tc, plan: p}
 }
 
 // List returns all sessions in the default tmux server, sorted by name.
@@ -109,14 +122,25 @@ func NewService(tc tmux.Client) *Service {
 // A missing server is mapped to an empty list rather than an error: when the
 // last session is killed the tmux server exits, and "no sessions" is the
 // state the dashboard should show (with the create hint, since n restarts
-// the server).
+// the server). tmux words this two ways — "no server running" for a server
+// that exited, and "error connecting to" for one that was never started.
 func (s *Service) List(ctx context.Context) ([]Info, error) {
 	sessions, err := s.tmux.ListSessions(ctx)
 	if err != nil {
-		if strings.Contains(err.Error(), "no server running") {
+		if strings.Contains(err.Error(), "no server running") || strings.Contains(err.Error(), "error connecting to") {
 			return nil, nil
 		}
 		return nil, err
+	}
+	// An active plan annotates matching sessions with their plan metadata;
+	// everything else is ad-hoc. tmux stays the source of truth — the join
+	// happens fresh on every list, nothing is remembered between calls.
+	var planByName map[string]*plan.Session
+	if s.plan != nil {
+		planByName = make(map[string]*plan.Session, len(s.plan.Sessions))
+		for i := range s.plan.Sessions {
+			planByName[s.plan.Sessions[i].Name] = &s.plan.Sessions[i]
+		}
 	}
 	infos := make([]Info, len(sessions))
 	for i, sess := range sessions {
@@ -128,12 +152,47 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 			Path:      sess.Path,
 			Attached:  sess.Attached,
 			Windows:   sess.Windows,
+			Plan:      planByName[sess.Name],
 		}
 	}
 	sort.Slice(infos, func(i, j int) bool {
 		return strings.ToLower(infos[i].Name) < strings.ToLower(infos[j].Name)
 	})
 	return infos, nil
+}
+
+// ApplyPlan creates every planned session that does not already exist in
+// tmux, using the same create machinery as the GUI dialogs (the shell
+// wrapper included). Existing sessions — planned or ad-hoc — are never
+// touched: a session whose name matches a plan entry counts as that planned
+// session and is not recreated or verified. Creation is best-effort per
+// session: every missing session is attempted and all failures are collected
+// and returned together, so one broken entry does not hide failures of the
+// others, and successfully created sessions are never rolled back. A missing
+// tmux server is treated as an empty session list, so the first run with a
+// plan starts the server.
+func (s *Service) ApplyPlan(ctx context.Context) error {
+	if s.plan == nil {
+		return nil
+	}
+	existing, err := s.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list sessions for plan: %w", err)
+	}
+	have := make(map[string]struct{}, len(existing))
+	for _, info := range existing {
+		have[info.Name] = struct{}{}
+	}
+	var errs []error
+	for _, sess := range s.plan.Sessions {
+		if _, ok := have[sess.Name]; ok {
+			continue
+		}
+		if err := s.Create(ctx, CreateOpts{Name: sess.Name, Dir: sess.Cwd, Command: sess.Command}); err != nil {
+			errs = append(errs, fmt.Errorf("create planned session %q: %w", sess.Name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Create starts a new detached tmux session. When opts.Command is empty the
@@ -356,16 +415,11 @@ func withoutTmuxEnv(env []string) []string {
 	return out
 }
 
-// ValidateName reports whether a session name is acceptable. tmux rejects
-// names containing ':' or '.', and empty names; other errors (duplicates,
-// invalid options) surface from tmux itself on create/rename.
+// ValidateName reports whether a session name is acceptable for the
+// create/rename dialogs. The name is trimmed first (dialogs tolerate stray
+// whitespace), then checked against tmux.ValidateSessionName — the canonical
+// rule set — so names validate identically whether they come from a dialog
+// or a session plan.
 func ValidateName(name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("session name is required")
-	}
-	if strings.ContainsAny(name, ":.&|;") {
-		return fmt.Errorf("session name %q contains an invalid character", name)
-	}
-	return nil
+	return tmux.ValidateSessionName(strings.TrimSpace(name))
 }

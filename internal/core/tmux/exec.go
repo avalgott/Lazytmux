@@ -25,6 +25,24 @@ func validateShellSafe(s, field string) error {
 	return nil
 }
 
+// ValidateSessionName reports whether a session name is safe to pass to tmux
+// and acceptable across lazytmux. It is the single source of truth for
+// session-name rules: empty names, shell metacharacters (the set
+// validateShellSafe rejects), and tmux's ':' and '.' separators are all
+// rejected.
+func ValidateSessionName(name string) error {
+	if name == "" {
+		return fmt.Errorf("session name is required")
+	}
+	if err := validateShellSafe(name, "session name"); err != nil {
+		return err
+	}
+	if strings.ContainsAny(name, ":.") {
+		return fmt.Errorf("session name %q contains an invalid character", name)
+	}
+	return nil
+}
+
 // envKeyPattern matches valid POSIX environment variable names.
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 

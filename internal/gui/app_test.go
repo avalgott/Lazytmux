@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/avalgott/Lazytmux/internal/plan"
 	"github.com/avalgott/Lazytmux/internal/session"
 )
 
@@ -247,6 +248,25 @@ func TestLayoutRendersSessions(t *testing.T) {
 		_, err := app.g.View(name)
 		assert.NoError(t, err, "view %q should exist", name)
 	}
+}
+
+func TestRenderSessionsPlannedBullet(t *testing.T) {
+	p := &fakeProvider{infos: []session.Info{
+		{Name: "web", Plan: &plan.Session{Name: "web", Command: "docker compose up web"}},
+		{Name: "scratch"},
+		{Name: "logs", Plan: &plan.Session{Name: "logs", Command: "docker compose logs -f web"}, Attached: true},
+	}}
+	app := newTestApp(t, p)
+	app.sessions = p.infos
+
+	require.NoError(t, app.layout(app.g))
+
+	v, err := app.g.View("sessions")
+	require.NoError(t, err)
+	buf := v.Buffer()
+	assert.Contains(t, buf, "● web", "planned sessions get a leading bullet")
+	assert.Contains(t, buf, "● logs")
+	assert.NotContains(t, buf, "● scratch", "ad-hoc sessions get no bullet")
 }
 
 func TestLayoutEmptyState(t *testing.T) {
@@ -603,6 +623,36 @@ func TestDeleteDialogFlow(t *testing.T) {
 	}, time.Second, 5*time.Millisecond)
 	_, killed, _ = p.snapshot()
 	assert.Equal(t, "logs", killed[0])
+}
+
+func TestRenameBlockedForPlannedSession(t *testing.T) {
+	p := &fakeProvider{infos: []session.Info{{Name: "web", Plan: &plan.Session{Name: "web"}}}}
+	app := newTestApp(t, p)
+	app.sessions = p.infos
+
+	require.NoError(t, app.openRenameHandler(app.g, nil))
+	assert.Equal(t, DialogNone, app.dialog, "the rename dialog must not open for a planned session")
+
+	require.NotEmpty(t, app.logs, "a message must be logged")
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "part of the active plan and cannot be renamed")
+
+	_, _, renames := p.snapshot()
+	assert.Empty(t, renames, "the rename must never reach tmux")
+}
+
+func TestDeleteBlockedForPlannedSession(t *testing.T) {
+	p := &fakeProvider{infos: []session.Info{{Name: "web", Plan: &plan.Session{Name: "web"}}}}
+	app := newTestApp(t, p)
+	app.sessions = p.infos
+
+	require.NoError(t, app.openConfirmDeleteHandler(app.g, nil))
+	assert.Equal(t, DialogNone, app.dialog, "the delete confirm must not open for a planned session")
+
+	require.NotEmpty(t, app.logs, "a message must be logged")
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "part of the active plan and cannot be deleted")
+
+	_, killed, _ := p.snapshot()
+	assert.Empty(t, killed, "the kill must never reach tmux")
 }
 
 func TestEnterOpensFullscreenNotAttach(t *testing.T) {

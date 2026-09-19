@@ -5,6 +5,8 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"os"
 
@@ -13,6 +15,7 @@ import (
 
 	"github.com/avalgott/Lazytmux/internal/core/tmux"
 	"github.com/avalgott/Lazytmux/internal/gui"
+	"github.com/avalgott/Lazytmux/internal/plan"
 	"github.com/avalgott/Lazytmux/internal/session"
 	"github.com/avalgott/Lazytmux/internal/update"
 )
@@ -23,9 +26,14 @@ var (
 )
 
 func main() {
+	planName := ""
+	flag.StringVar(&planName, "p", "", "session plan to load (~/.config/lazytmux/plans/<name>.yaml)")
+	flag.StringVar(&planName, "plan", "", "session plan to load (same as -p)")
+	flag.Parse()
+
 	// `lazytmux update` self-updates to the latest GitHub release instead of
-	// starting the TUI.
-	if len(os.Args) > 1 && os.Args[1] == "update" {
+	// starting the TUI. It is a distinct mode and wins over a plan flag.
+	if flag.NArg() > 0 && flag.Arg(0) == "update" {
 		if err := update.Run(version); err != nil {
 			fmt.Fprintln(os.Stderr, "lazytmux update:", err)
 			os.Exit(1)
@@ -33,7 +41,17 @@ func main() {
 		return
 	}
 
-	if err := run(); err != nil {
+	var p *plan.Plan
+	if planName != "" {
+		loaded, err := plan.Load(planName)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "lazytmux:", err)
+			os.Exit(1)
+		}
+		p = loaded
+	}
+
+	if err := run(p); err != nil {
 		fmt.Fprintln(os.Stderr, "lazytmux:", err)
 		os.Exit(1)
 	}
@@ -50,8 +68,15 @@ func main() {
 // original session is still alive detached and reachable with plain
 // `tmux attach`. The pty size is captured before the attach and restored
 // afterwards in case the client left it corrupt.
-func run() error {
-	svc := session.NewService(tmux.NewExecClient())
+func run(p *plan.Plan) error {
+	tc := tmux.NewExecClient()
+	svc := session.NewService(tc)
+	if p != nil {
+		svc = session.NewServiceWithPlan(tc, p)
+		if err := svc.ApplyPlan(context.Background()); err != nil {
+			return err
+		}
+	}
 
 	for {
 		app, err := gui.NewApp(svc, update.ReleaseVersion(version))

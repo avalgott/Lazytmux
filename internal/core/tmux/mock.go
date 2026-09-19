@@ -35,6 +35,13 @@ type MockClient struct {
 	LastNewSessionOpts NewSessionOpts
 	LastNewWindowOpts  NewWindowOpts
 
+	// NewSessionOptsList records every NewSession call (LastNewSessionOpts
+	// keeps only the most recent one).
+	NewSessionOptsList []NewSessionOpts
+	// NewSessionErrs injects a per-name NewSession failure, checked before
+	// ErrNewSession. The attempt is still recorded in NewSessionOptsList.
+	NewSessionErrs map[string]error
+
 	// Error injection
 	ErrListClients   error
 	ErrListSessions  error
@@ -130,6 +137,10 @@ func (m *MockClient) HasSession(_ context.Context, name string) (bool, error) {
 }
 
 func (m *MockClient) NewSession(_ context.Context, opts NewSessionOpts) error {
+	m.NewSessionOptsList = append(m.NewSessionOptsList, opts)
+	if err := m.NewSessionErrs[opts.Name]; err != nil {
+		return err
+	}
 	if m.ErrNewSession != nil {
 		return m.ErrNewSession
 	}

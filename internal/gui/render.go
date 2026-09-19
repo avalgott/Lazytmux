@@ -12,9 +12,10 @@ import (
 )
 
 // renderSessions draws the session list. The selected row is highlighted by
-// gocui via SetCursor; an attached session gets a green marker. When the list
-// is empty (or tmux is unreachable) only the create hint is shown — the raw
-// tmux error is too noisy for the panel and is left out deliberately.
+// gocui via SetCursor; an attached session gets a green marker; a session
+// from the active Session Plan gets a dim bullet before its name. When the
+// list is empty (or tmux is unreachable) only the create hint is shown — the
+// raw tmux error is too noisy for the panel and is left out deliberately.
 func renderSessions(v *gocui.View, sessions []session.Info, cursor int) {
 	if len(sessions) == 0 {
 		fmt.Fprintln(v, "")
@@ -23,11 +24,15 @@ func renderSessions(v *gocui.View, sessions []session.Info, cursor int) {
 	}
 
 	for _, s := range sessions {
+		bullet := " "
+		if s.Plan != nil {
+			bullet = presentation.FgDimGray + presentation.IconPlanned + presentation.Reset
+		}
 		marker := " "
 		if s.Attached {
 			marker = " " + presentation.FgGreen + presentation.IconAttached + presentation.Reset
 		}
-		fmt.Fprintf(v, "  %-18s%s\n", s.Name, marker)
+		fmt.Fprintf(v, " %s %-18s%s\n", bullet, s.Name, marker)
 	}
 
 	v.SetCursor(0, cursor)

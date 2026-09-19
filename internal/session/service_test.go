@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/avalgott/Lazytmux/internal/core/tmux"
+	"github.com/avalgott/Lazytmux/internal/plan"
 )
 
 func TestServiceList(t *testing.T) {
@@ -51,6 +52,16 @@ func TestServiceListNoServerIsEmpty(t *testing.T) {
 	svc := NewService(mock)
 	infos, err := svc.List(context.Background())
 	require.NoError(t, err, "a missing server means zero sessions, not an error")
+	assert.Empty(t, infos)
+}
+
+func TestServiceListNoSocketIsEmpty(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.ErrListSessions = errors.New("tmux -u list-sessions: exit status 1 (stderr: error connecting to /tmp/tmux-1000/default (No such file or directory))")
+
+	svc := NewService(mock)
+	infos, err := svc.List(context.Background())
+	require.NoError(t, err, "a never-started server means zero sessions, not an error")
 	assert.Empty(t, infos)
 }
 
@@ -322,6 +333,144 @@ func TestValidateName(t *testing.T) {
 			assert.NoError(t, err, "name %q should be accepted", c.name)
 		}
 	}
+}
+
+func TestValidateNameDelegatesToCanonicalRules(t *testing.T) {
+	assert.Error(t, ValidateName("a$b"), "shell metacharacters must be rejected at dialog time")
+	assert.NoError(t, ValidateName("  devbox  "), "names are trimmed before validation")
+}
+
+func TestServiceListAnnotatesPlan(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.Infos["web"] = tmux.SessionInfo{Name: "web", Path: "/work"}
+	mock.Infos["scratch"] = tmux.SessionInfo{Name: "scratch", Path: "/tmp"}
+
+	p := &plan.Plan{
+		Name: "myapp",
+		Root: "/work",
+		Sessions: []plan.Session{
+			{Name: "web", Cwd: "/work", Command: "docker compose up web"},
+			{Name: "worker", Cwd: "/work", Command: "run worker"},
+		},
+	}
+	svc := NewServiceWithPlan(mock, p)
+	infos, err := svc.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, infos, 2)
+
+	// Sorted: scratch, web.
+	require.Nil(t, infos[0].Plan, "ad-hoc sessions carry no plan metadata")
+	require.NotNil(t, infos[1].Plan, "a pre-existing session matching the plan by name is the planned session")
+	assert.Equal(t, "web", infos[1].Plan.Name)
+	assert.Equal(t, "/work", infos[1].Plan.Cwd)
+	assert.Equal(t, "docker compose up web", infos[1].Plan.Command)
+}
+
+func TestServiceApplyPlanCreatesMissing(t *testing.T) {
+	t.Setenv("SHELL", "/bin/bash")
+	mock := tmux.NewMockClient()
+	p := &plan.Plan{
+		Name: "myapp",
+		Root: "/work",
+		Sessions: []plan.Session{
+			{Name: "web", Cwd: "/work", Command: "docker compose up web"},
+			{Name: "worker", Cwd: "/work", Command: "run worker"},
+			{Name: "shell", Cwd: "/work"},
+		},
+	}
+	svc := NewServiceWithPlan(mock, p)
+	require.NoError(t, svc.ApplyPlan(context.Background()))
+
+	require.Len(t, mock.NewSessionOptsList, 3)
+	web, worker, shell := mock.NewSessionOptsList[0], mock.NewSessionOptsList[1], mock.NewSessionOptsList[2]
+	assert.Equal(t, "web", web.Name)
+	assert.Equal(t, "/work", web.StartDir)
+	assert.True(t, web.Detached)
+	assert.Contains(t, web.Command, `exec "$SHELL" -lic '. /tmp/lazytmux-cmd-`, "command sessions run through the shell wrapper")
+	assert.Equal(t, "worker", worker.Name)
+	assert.Equal(t, "/work", worker.StartDir)
+	assert.Contains(t, worker.Command, `exec "$SHELL" -lic '. /tmp/lazytmux-cmd-`)
+	assert.Equal(t, "shell", shell.Name)
+	assert.Empty(t, shell.Command, "a planned session without a command is a plain shell")
+	assert.Equal(t, "/work", shell.StartDir)
+
+	// The mock never runs the sessions, so the self-delete line never fires —
+	// remove the scripts at test end (same pattern as TestServiceCreate).
+	for _, opts := range mock.NewSessionOptsList {
+		if opts.Command == "" {
+			continue
+		}
+		script := strings.TrimSuffix(strings.TrimPrefix(opts.Command, `exec "$SHELL" -lic '. `), `; exec "$SHELL"'`)
+		t.Cleanup(func() { _ = os.Remove(script) })
+	}
+}
+
+func TestServiceApplyPlanWithoutRootUsesDefaultCwd(t *testing.T) {
+	mock := tmux.NewMockClient()
+	p := &plan.Plan{Name: "myapp", Sessions: []plan.Session{{Name: "shell"}}}
+	svc := NewServiceWithPlan(mock, p)
+	require.NoError(t, svc.ApplyPlan(context.Background()))
+
+	require.Len(t, mock.NewSessionOptsList, 1)
+	assert.Empty(t, mock.NewSessionOptsList[0].StartDir, "no root and no cwd means tmux's default directory")
+	assert.Empty(t, mock.NewSessionOptsList[0].Command)
+}
+
+func TestServiceApplyPlanSkipsExisting(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.Infos["web"] = tmux.SessionInfo{Name: "web"}
+	p := &plan.Plan{Name: "myapp", Sessions: []plan.Session{{Name: "web", Cwd: "/x", Command: "different command"}}}
+	svc := NewServiceWithPlan(mock, p)
+	require.NoError(t, svc.ApplyPlan(context.Background()))
+
+	assert.Empty(t, mock.NewSessionOptsList, "an existing session with a matching name is reused, never recreated")
+	assert.Contains(t, mock.Infos, "web", "the existing session is left untouched")
+}
+
+func TestServiceApplyPlanCollectsErrors(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.ErrNewSession = assert.AnError
+	p := &plan.Plan{Name: "myapp", Sessions: []plan.Session{{Name: "web"}, {Name: "worker"}, {Name: "shell"}}}
+	svc := NewServiceWithPlan(mock, p)
+
+	err := svc.ApplyPlan(context.Background())
+	require.Error(t, err)
+	require.Len(t, mock.NewSessionOptsList, 3, "every missing session is attempted even after failures")
+	assert.Contains(t, err.Error(), `create planned session "web"`)
+	assert.Contains(t, err.Error(), `create planned session "worker"`)
+	assert.Contains(t, err.Error(), `create planned session "shell"`)
+}
+
+func TestServiceApplyPlanPartialSuccess(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.NewSessionErrs = map[string]error{"web": assert.AnError}
+	p := &plan.Plan{Name: "myapp", Sessions: []plan.Session{{Name: "web"}, {Name: "worker"}}}
+	svc := NewServiceWithPlan(mock, p)
+
+	err := svc.ApplyPlan(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `create planned session "web"`)
+	assert.NotContains(t, err.Error(), "worker", "successful sessions are not reported as failures")
+	require.Len(t, mock.NewSessionOptsList, 2)
+	assert.Contains(t, mock.Sessions, "worker", "successfully created sessions are kept")
+}
+
+func TestServiceApplyPlanNoServer(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.ErrListSessions = errors.New("tmux -u list-sessions: exit status 1 (stderr: no server running on /tmp/tmux-1000/default)")
+	p := &plan.Plan{Name: "myapp", Sessions: []plan.Session{{Name: "web"}}}
+	svc := NewServiceWithPlan(mock, p)
+
+	require.NoError(t, svc.ApplyPlan(context.Background()), "a missing server means zero sessions, so all are created")
+	require.Len(t, mock.NewSessionOptsList, 1)
+}
+
+func TestServiceApplyPlanWithoutPlanIsNoop(t *testing.T) {
+	mock := tmux.NewMockClient()
+	svc := NewService(mock)
+
+	require.NoError(t, svc.ApplyPlan(context.Background()))
+	assert.Empty(t, mock.NewSessionOptsList)
 }
 
 // TestShellWrapperExecutesUnderPOSIX runs the generated wrapper in a real

@@ -4,3 +4,4 @@ integration.test
 .env
 .DS_Store
 .reports/
+docs/

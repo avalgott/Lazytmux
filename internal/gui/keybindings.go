@@ -255,6 +255,10 @@ func (a *App) openRenameHandler(g *gocui.Gui, v *gocui.View) error {
 	if sess == nil {
 		return nil
 	}
+	if sess.Plan != nil {
+		a.setStatus(fmt.Sprintf("session %q is part of the active plan and cannot be renamed", sess.Name))
+		return nil
+	}
 	a.renameTarget = sess.Name
 	a.dialog = DialogRename
 	return nil
@@ -266,6 +270,10 @@ func (a *App) openConfirmDeleteHandler(g *gocui.Gui, v *gocui.View) error {
 	}
 	sess := a.currentSession()
 	if sess == nil {
+		return nil
+	}
+	if sess.Plan != nil {
+		a.setStatus(fmt.Sprintf("session %q is part of the active plan and cannot be deleted", sess.Name))
 		return nil
 	}
 	a.confirmTarget = sess.Name
