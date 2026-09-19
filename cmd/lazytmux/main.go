@@ -5,6 +5,8 @@
 package main
 
 import (
+	"context"
+	"flag"
 	"fmt"
 	"os"
 
@@ -13,6 +15,7 @@ import (
 
 	"github.com/avalgott/Lazytmux/internal/core/tmux"
 	"github.com/avalgott/Lazytmux/internal/gui"
+	"github.com/avalgott/Lazytmux/internal/plan"
 	"github.com/avalgott/Lazytmux/internal/session"
 	"github.com/avalgott/Lazytmux/internal/update"
 )
@@ -22,10 +25,20 @@ var (
 	commit  = "none"
 )
 
+// planFlagHelp describes the -p/--plan flag. The plan path is resolved
+// through the user config directory (os.UserConfigDir), ~/.config unless
+// XDG_CONFIG_HOME is set, so the help does not pin a fixed path.
+var planFlagHelp = "session plan to load from the user config directory (lazytmux/plans/<name>.yaml)"
+
 func main() {
+	planName := ""
+	flag.StringVar(&planName, "p", "", planFlagHelp)
+	flag.StringVar(&planName, "plan", "", planFlagHelp+" (same as -p)")
+	flag.Parse()
+
 	// `lazytmux update` self-updates to the latest GitHub release instead of
-	// starting the TUI.
-	if len(os.Args) > 1 && os.Args[1] == "update" {
+	// starting the TUI. It is a distinct mode and wins over a plan flag.
+	if flag.NArg() > 0 && flag.Arg(0) == "update" {
 		if err := update.Run(version); err != nil {
 			fmt.Fprintln(os.Stderr, "lazytmux update:", err)
 			os.Exit(1)
@@ -33,7 +46,17 @@ func main() {
 		return
 	}
 
-	if err := run(); err != nil {
+	var p *plan.Plan
+	if planName != "" {
+		loaded, err := plan.Load(planName)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "lazytmux:", err)
+			os.Exit(1)
+		}
+		p = loaded
+	}
+
+	if err := run(p); err != nil {
 		fmt.Fprintln(os.Stderr, "lazytmux:", err)
 		os.Exit(1)
 	}
@@ -46,12 +69,19 @@ func main() {
 //
 // When lazytmux runs inside a tmux session, the attach takes over the
 // terminal as a new tmux client (the original client is displaced), so after
-// detaching the user returns to the dashboard on a raw terminal — their
+// detaching the user returns to the dashboard on a raw terminal, their
 // original session is still alive detached and reachable with plain
 // `tmux attach`. The pty size is captured before the attach and restored
 // afterwards in case the client left it corrupt.
-func run() error {
-	svc := session.NewService(tmux.NewExecClient())
+func run(p *plan.Plan) error {
+	tc := tmux.NewExecClient()
+	svc := session.NewService(tc)
+	if p != nil {
+		svc = session.NewServiceWithPlan(tc, p)
+		if err := svc.ApplyPlan(context.Background()); err != nil {
+			return err
+		}
+	}
 
 	for {
 		app, err := gui.NewApp(svc, update.ReleaseVersion(version))

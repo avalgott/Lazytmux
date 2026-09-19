@@ -22,6 +22,7 @@ const (
 const (
 	IconSep      = "│"
 	IconAttached = "●"
+	IconPlanned  = "●" // bullet marking sessions from the active Session Plan
 )
 
 // StyledKey renders a keybinding hint: key in bold, description in dim.

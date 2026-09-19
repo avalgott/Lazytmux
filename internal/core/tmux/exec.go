@@ -25,6 +25,24 @@ func validateShellSafe(s, field string) error {
 	return nil
 }
 
+// ValidateSessionName reports whether a session name is safe to pass to tmux
+// and acceptable across lazytmux. It is the single source of truth for
+// session-name rules: empty names, shell metacharacters (the set
+// validateShellSafe rejects), and tmux's ':' and '.' separators are all
+// rejected.
+func ValidateSessionName(name string) error {
+	if name == "" {
+		return fmt.Errorf("session name is required")
+	}
+	if err := validateShellSafe(name, "session name"); err != nil {
+		return err
+	}
+	if strings.ContainsAny(name, ":.") {
+		return fmt.Errorf("session name %q contains an invalid character", name)
+	}
+	return nil
+}
+
 // envKeyPattern matches valid POSIX environment variable names.
 var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
@@ -104,7 +122,7 @@ func (c *ExecClient) runRaw(ctx context.Context, args ...string) (string, error)
 	fullArgs := c.prependSocket(args)
 	cmd := exec.CommandContext(ctx, c.tmuxBin, fullArgs...)
 
-	// Use Output() (stdout only) — CombinedOutput() mixes stderr into stdout
+	// Use Output() (stdout only), CombinedOutput() mixes stderr into stdout
 	// which corrupts parseWindows/parsePanes parsing.
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -173,7 +191,7 @@ func (c *ExecClient) HasSession(ctx context.Context, name string) (bool, error) 
 			return false, nil
 		}
 		// Any other stderr (e.g., "error connecting")
-		// is a transient error — propagate it.
+		// is a transient error, propagate it.
 		return false, fmt.Errorf("tmux has-session transient error: %s", strings.TrimSpace(stderrStr))
 	}
 	return true, nil
@@ -183,7 +201,7 @@ func (c *ExecClient) NewSession(ctx context.Context, opts NewSessionOpts) error 
 	if err := validateShellSafe(opts.Name, "session name"); err != nil {
 		return err
 	}
-	// opts.Command is not validated — it is user input and may contain shell
+	// opts.Command is not validated, it is user input and may contain shell
 	// constructs like `ssh devbox` or `tail -f /var/log/app.log`.
 	for k := range opts.Env {
 		if err := validateEnvKey(k); err != nil {
@@ -371,8 +389,8 @@ func (c *ExecClient) CapturePaneANSIWithCursor(ctx context.Context, target strin
 // "capture-pane -ep ; display-message -p #{cursor_x},#{cursor_y}" into the
 // capture content and the cursor position. The cursor pair is the final
 // line when it parses as two integers. Splitting by line structure (rather
-// than trimming trailing newlines) keeps blank trailing rows — an
-// alt-screen app's cursor row — which TrimRight would destroy, wobbling the
+// than trimming trailing newlines) keeps blank trailing rows, an
+// alt-screen app's cursor row, which TrimRight would destroy, wobbling the
 // row count between captures.
 func splitCursorPair(out string) (content string, cursorX, cursorY int, paneID string) {
 	lines := strings.Split(out, "\n")
@@ -426,13 +444,13 @@ func (c *ExecClient) CapturePaneANSIHistory(ctx context.Context, target string) 
 
 // PaneInputFlags reports the pane's input mode in one display-message call:
 // whether the alternate screen is active, whether the program has mouse
-// tracking enabled with the SGR (1006) encoding — the only encoding
-// SendMouseWheel emits — and the pane cursor position (0-based). The format
-// is the positional argument, matching ShowMessage — display-message expands
+// tracking enabled with the SGR (1006) encoding, the only encoding
+// SendMouseWheel emits, and the pane cursor position (0-based). The format
+// is the positional argument, matching ShowMessage, display-message expands
 // format variables there on every tmux version.
 //
 // mouse_any_flag is the aggregate over every tracking mode (1000 standard,
-// 1002 button-event, 1003 any-event), NOT the 1003-only flag — that is
+// 1002 button-event, 1003 any-event), NOT the 1003-only flag, that is
 // mouse_all_flag, which would exclude vim-style 1000/1002 tracking. Verified
 // against a live tmux: 1002+1006 reports any=1 sgr=1 (forward), 1006 alone
 // reports any=0 sgr=1 (do not forward).
@@ -446,7 +464,7 @@ func (c *ExecClient) PaneInputFlags(ctx context.Context, target string) (bool, b
 }
 
 // SendMouseWheel sends a mouse wheel event to the target pane's input stream
-// as a single SGR mouse escape sequence (wheel motion is an impulse — there
+// as a single SGR mouse escape sequence (wheel motion is an impulse, there
 // is no release event). A program with SGR mouse tracking enabled reads it
 // as a real wheel event.
 func (c *ExecClient) SendMouseWheel(ctx context.Context, target string, up bool, x, y int) error {
@@ -456,7 +474,7 @@ func (c *ExecClient) SendMouseWheel(ctx context.Context, target string, up bool,
 
 // splitPaneHeightLine splits the combined output of
 // "capture-pane -ep -S - ; display-message -p #{pane_height}" into the raw
-// capture content (its trailing newline preserved — capture output terminates
+// capture content (its trailing newline preserved, capture output terminates
 // with one) and the pane height.
 func splitPaneHeightLine(out string) (string, int, string, error) {
 	s := strings.TrimRight(out, "\n")
@@ -482,7 +500,7 @@ func splitPaneHeightLine(out string) (string, int, string, error) {
 // parseInputFlags parses the display-message output of
 // "#{alternate_on} #{mouse_any_flag} #{mouse_sgr_flag} #{cursor_x} #{cursor_y}".
 // The mouse result is true only when a tracking mode is enabled AND the SGR
-// (1006) encoding is selected — SGR alone leaves a program that is not
+// (1006) encoding is selected, SGR alone leaves a program that is not
 // listening for mouse events, and any other encoding would not understand
 // the SGR sequences SendMouseWheel emits. mouse_any_flag covers every
 // tracking mode (1000/1002/1003); mouse_all_flag would restrict the check
@@ -504,7 +522,7 @@ func parseInputFlags(s string) (altOn, mouseSGR bool, cx, cy int, paneID string,
 }
 
 // sgrWheel builds the SGR mouse escape sequence for one wheel step. Wheel
-// motion is reported as single impulses — unlike button presses there is no
+// motion is reported as single impulses, unlike button presses there is no
 // release event, so appending one would inject a spurious second event.
 // Coordinates are converted from 0-based pane-relative mouse coordinates
 // to SGR's 1-based scheme, clamped to at least 1.

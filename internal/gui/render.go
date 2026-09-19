@@ -12,9 +12,10 @@ import (
 )
 
 // renderSessions draws the session list. The selected row is highlighted by
-// gocui via SetCursor; an attached session gets a green marker. When the list
-// is empty (or tmux is unreachable) only the create hint is shown — the raw
-// tmux error is too noisy for the panel and is left out deliberately.
+// gocui via SetCursor; an attached session gets a green marker; a session
+// from the active Session Plan gets a dim bullet before its name. When the
+// list is empty (or tmux is unreachable) only the create hint is shown, the
+// raw tmux error is too noisy for the panel and is left out deliberately.
 func renderSessions(v *gocui.View, sessions []session.Info, cursor int) {
 	if len(sessions) == 0 {
 		fmt.Fprintln(v, "")
@@ -23,11 +24,15 @@ func renderSessions(v *gocui.View, sessions []session.Info, cursor int) {
 	}
 
 	for _, s := range sessions {
+		bullet := " "
+		if s.Plan != nil {
+			bullet = presentation.FgDimGray + presentation.IconPlanned + presentation.Reset
+		}
 		marker := " "
 		if s.Attached {
 			marker = " " + presentation.FgGreen + presentation.IconAttached + presentation.Reset
 		}
-		fmt.Fprintf(v, "  %-18s%s\n", s.Name, marker)
+		fmt.Fprintf(v, " %s %-18s%s\n", bullet, s.Name, marker)
 	}
 
 	v.SetCursor(0, cursor)
@@ -36,7 +41,7 @@ func renderSessions(v *gocui.View, sessions []session.Info, cursor int) {
 // renderPreview draws the live capture of the selected session's active pane.
 // Captures run in a goroutine and are cached; the layout cycle triggers a new
 // capture when the selection changes or the cache is stale. With no sessions
-// the panel stays empty — the create hint lives in the left panel only.
+// the panel stays empty, the create hint lives in the left panel only.
 func (a *App) renderPreview(v *gocui.View) {
 	sess := a.currentSession()
 	if sess == nil {
@@ -47,7 +52,7 @@ func (a *App) renderPreview(v *gocui.View) {
 	v.Title = fmt.Sprintf(" %s ", sess.Name)
 	// A recent scroll attempt on a session without scrollback explains
 	// itself in the title for a few seconds (the log keeps a record too).
-	// Dashboard only — the fullscreen frame title carries the session name.
+	// Dashboard only, the fullscreen frame title carries the session name.
 	// The verdict belongs to a specific pane: a replacement pane must not
 	// inherit the old pane's title.
 	a.buffersMu.Lock()
@@ -101,7 +106,7 @@ func (a *App) renderPreview(v *gocui.View) {
 // previewCaptureTick starts a fresh live capture when the cache needs one.
 // Split out of renderPreview so the frozen-snapshot renders can keep the
 // capture pipeline (and the synthetic-buffer feeds it drives) running while
-// the panel shows scrollback instead of the live screen — otherwise output
+// the panel shows scrollback instead of the live screen, otherwise output
 // arriving during a long browse falls into the gap between captures and
 // never reaches the synthetic scrollback.
 func (a *App) previewCaptureTick(v *gocui.View, sess *session.Info) {
@@ -154,7 +159,7 @@ func (a *App) previewCaptureTick(v *gocui.View, sess *session.Info) {
 // started: a refresh in between means the session may have vanished (or its
 // name been reused), so the stale completion must not feed history.
 func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, cs uint64, result session.Preview, err error) {
-	// The generation check and the pane recording are atomic under fsMu —
+	// The generation check and the pane recording are atomic under fsMu,
 	// the refresh (which prunes pane metadata) holds the same lock, so a
 	// stale capture cannot repopulate paneIDs for a removed session. Failed
 	// captures record nothing: their pane identity is meaningless.
@@ -184,7 +189,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 	if err == nil {
 		a.preview.Update(name, result.Content, gen, result.PaneID, cursorSnapshot, result.CursorX, result.CursorY)
 	} else {
-		// Failed capture (e.g. session died between refresh cycles) —
+		// Failed capture (e.g. session died between refresh cycles),
 		// mark fetched so we don't retry on every render. The pane is
 		// retagged to the CURRENT recorded binding: after a pane rebind,
 		// keeping the old pane ID would trip the render-time mismatch on
@@ -203,7 +208,7 @@ func (a *App) renderPreviewCapture(name string, cursorSnapshot int, gen uint64, 
 
 // recordPaneLocked binds a session to the pane its capture came from.
 // Returns true when the active pane changed (the previous pane's buffer is
-// dropped). The caller holds fsMu; buffersMu is taken inside — the same
+// dropped). The caller holds fsMu; buffersMu is taken inside, the same
 // order the refresh uses.
 func (a *App) recordPaneLocked(name, paneID string, cs uint64) (changed bool) {
 	if paneID == "" {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jesseduffield/gocui"
 
 	"github.com/avalgott/Lazytmux/internal/gui/presentation"
@@ -56,7 +58,7 @@ type Layout struct {
 // is Width-2 / Height-2, so every view needs 2 extra rows/cols. The options
 // bar therefore spans maxY-2..maxY: one unused row, then its single content
 // row (the hints) lands on the last screen row. maxY itself is off screen
-// (valid rows are 0..maxY-1) but harmless — out-of-range cells are swallowed
+// (valid rows are 0..maxY-1) but harmless, out-of-range cells are swallowed
 // by the draw loop.
 func ComputeLayout(width, height int) Layout {
 	maxX := width
@@ -73,8 +75,8 @@ func ComputeLayout(width, height int) Layout {
 	leftH := maxY - 2 // rows available to the left-column panels
 	sessY1 := (leftH * 2) / 3
 	logsY0 := sessY1 + 1
-	// The version strip is exactly three rows — top border (with the
-	// title), the version content, bottom border — pinned to the bottom of
+	// The version strip is exactly three rows, top border (with the
+	// title), the version content, bottom border, pinned to the bottom of
 	// the left column, right above the options bar. On short terminals the
 	// strip is omitted entirely (a zero rect), so the session list and the
 	// logs keep usable inner rows instead.
@@ -180,7 +182,8 @@ func (a *App) setDashboardFocus(g *gocui.Gui) error {
 }
 
 func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
-	g.DeleteView("fullscreen-bar") // clean up after fullscreen mode
+	g.DeleteView("fullscreen-bar")     // clean up after fullscreen mode
+	g.DeleteView("fullscreen-command") // clean up after fullscreen mode
 
 	l := ComputeLayout(maxX, maxY)
 	a.clampCursor()
@@ -198,7 +201,7 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	v.Clear()
 	renderSessions(v, a.sessions, a.cursor)
 
-	// Logs view (lower left) — recent status/error messages
+	// Logs view (lower left), recent status/error messages
 	vlog, err := g.SetView("logs", l.Logs.X0, l.Logs.Y0, l.Logs.X1, l.Logs.Y1, 0)
 	if err != nil && !isUnknownView(err) {
 		return err
@@ -227,7 +230,7 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 		g.DeleteView("version")
 	}
 
-	// Main panel (right side) — live preview of the selected session
+	// Main panel (right side), live preview of the selected session
 	v3, err := g.SetView("main", l.Main.X0, l.Main.Y0, l.Main.X1, l.Main.Y1, 0)
 	if err != nil && !isUnknownView(err) {
 		return err
@@ -266,9 +269,59 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	return nil
 }
 
+// wrapCommandLines wraps the configured command into at most 3 display rows
+// for the command panel, breaking at word boundaries at the given display
+// width (long unbroken tokens break at the width). When the command needs
+// more than 3 rows, the last visible row is truncated with an ellipsis.
+func wrapCommandLines(cmd string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	cmd = strings.TrimRight(cmd, "\n")
+	lines := strings.Split(ansi.Hardwrap(cmd, width, false), "\n")
+	if len(lines) > 3 {
+		lines = lines[:3]
+		lines[2] = ansi.Truncate(lines[2], width-1, "…")
+	}
+	return lines
+}
+
+// commandPanelLines wraps the configured command into the command panel's
+// display rows. innerWidth is the panel's inner width; every row is rendered
+// with a one-cell leading padding, so the wrap reserves that cell: a row
+// that fills the inner width would otherwise be clipped at draw time (the
+// view draws content at a one-cell inset and Wrap=false drops the
+// overflowing cell).
+func commandPanelLines(cmd string, innerWidth int) []string {
+	lines := wrapCommandLines(cmd, innerWidth-1)
+	for i, l := range lines {
+		lines[i] = " " + l
+	}
+	return lines
+}
+
+// fullscreenPlanCommand returns the YAML-configured command of the fullscreen
+// target, or "" when the target is ad-hoc or its plan entry has no command.
+// The session list keeps refreshing every 300ms even in fullscreen, so read
+// it fresh on every layout rather than caching, the panel always shows the
+// plan command, never what the pane is currently running.
+func (a *App) fullscreenPlanCommand() string {
+	target := a.fullscreen.Target()
+	if target == "" {
+		return ""
+	}
+	for _, s := range a.sessions {
+		if s.Name == target && s.Plan != nil {
+			return s.Plan.Command
+		}
+	}
+	return ""
+}
+
 // layoutFullScreen lays out the passthrough mode: the main view fills the
 // terminal (frameless) and forwards every key to the target session's pane;
-// a status bar at the bottom shows the mode hints.
+// a status bar at the bottom shows the mode hints. A planned session with a
+// configured command additionally gets a framed Command panel above the bar.
 func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	// Remove split-panel views so only the fullscreen view remains.
 	g.DeleteView("sessions")
@@ -276,7 +329,45 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	g.DeleteView("version")
 	g.DeleteView("options")
 
-	v, err := g.SetView("main", 0, 0, maxX-1, maxY-2, 0)
+	// Command panel geometry: a framed view with N content rows spans N+2
+	// rows (the fork draws content at y0+1), and its bottom frame lands on
+	// maxY-3, the row directly above the status bar (maxY-2..maxY), so
+	// top = maxY-4-N. On very short terminals the panel shrinks and finally
+	// disappears rather than starve the main view.
+	cmd := a.fullscreenPlanCommand()
+	cmdTop := 0
+	if cmd != "" {
+		lines := commandPanelLines(cmd, maxX-2)
+		rows := len(lines)
+		if maxRows := maxY - 11; rows > maxRows {
+			rows = maxRows
+		}
+		if rows >= 1 {
+			cmdTop = maxY - 4 - rows
+			vc, err := g.SetView("fullscreen-command", 0, cmdTop, maxX-1, maxY-3, 0)
+			if err != nil && !isUnknownView(err) {
+				return err
+			}
+			setRoundedFrame(vc)
+			vc.Title = " Command "
+			vc.Wrap = false
+			vc.Editable = false
+			vc.Clear()
+			for _, l := range lines[:rows] {
+				fmt.Fprintln(vc, l)
+			}
+		}
+	}
+	if cmdTop == 0 {
+		// No panel this layout, a previous target's panel must not linger.
+		g.DeleteView("fullscreen-command")
+	}
+
+	mainY1 := maxY - 2
+	if cmdTop > 0 {
+		mainY1 = cmdTop - 1
+	}
+	v, err := g.SetView("main", 0, 0, maxX-1, mainY1, 0)
 	if err != nil && !isUnknownView(err) {
 		return err
 	}
@@ -328,7 +419,7 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 			currentPane := a.paneIDs[a.fullscreen.Target()]
 			a.buffersMu.Unlock()
 			// The verdict goes stale the moment the synthetic buffer gains
-			// history — the badge must not keep claiming otherwise.
+			// history, the badge must not keep claiming otherwise.
 			if currentPane == a.fullscreenNoScrollbackPane && !a.bufferHasHistory(a.fullscreen.Target()) {
 				fmt.Fprint(v2, "  "+presentation.Dim+"no scrollback"+presentation.Reset)
 			}
@@ -345,11 +436,11 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 // resizeFullScreenTarget sizes the target session's window to fill the
 // fullscreen view. capture-pane returns the pane's real size, and sessions
 // created detached (or via `n`) keep tmux's default 80x24 window forever
-// unless something attaches to them — so without this the fullscreen content
+// unless something attaches to them, so without this the fullscreen content
 // stays a small box no matter how large the terminal is.
 //
 // The window is sized to exactly the view dimensions (like lazyclaude), so
-// the pane and the view agree 1:1 — full-screen programs (e.g. Claude Code)
+// the pane and the view agree 1:1, full-screen programs (e.g. Claude Code)
 // lay out to the exact space the view shows, and no row is clipped. With the
 // session's status bar on, the pane is one row shorter and still fits
 // entirely.
@@ -455,7 +546,7 @@ func (a *App) layoutCreateDialog(g *gocui.Gui, maxX, maxY int) {
 
 	// Initial content of the three fields. The directory field is prefilled
 	// with the working directory; the other two start empty. Content is only
-	// written when a view is newly created — re-typing it on every layout
+	// written when a view is newly created, re-typing it on every layout
 	// cycle would move the input cursor to the end of the field.
 	initial := [3]string{"", cwdOrEmpty(), ""}
 	for i := 0; i < 3; i++ {

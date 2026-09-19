@@ -22,7 +22,8 @@ A [lazygit](https://github.com/jesseduffield/lazygit)-style TUI for managing [tm
 - **Fullscreen passthrough:** `Enter` expands the selected session to the full terminal and forwards every keystroke to it; `Ctrl+D` returns to the dashboard instantly.
 - **Real attach too:** `a` attaches with `tmux attach-session`, the right tool for vim, htop, and other full-screen TUI apps; detaching returns you to the dashboard.
 - **Session lifecycle:** create, rename, and kill sessions from the TUI.
-- **Zero configuration:** no config files, no separate tmux socket, no state on disk.
+- **Session Plans:** declare named sessions in a YAML plan; lazytmux creates the missing ones at startup.
+- **Zero configuration by default:** works with no config files, no separate tmux socket, no state on disk; optional Session Plans add a single YAML file and nothing else.
 - **Works with anything:** shells, SSH, database CLIs, log tails, dev servers, vim, htop. There is no editor-, agent-, or tool-specific behavior.
 
 ## Requirements
@@ -74,6 +75,44 @@ lazytmux               # browse with j/k, Enter opens fullscreen, Ctrl+D returns
 ```
 
 `Enter` opens the session in fullscreen passthrough mode: the dashboard stays alive and forwards your keystrokes to the session's pane, so `Ctrl+D` returns to the dashboard instantly, no tmux detach needed. `a` performs a real `tmux attach-session` instead, and detaching from it returns you to the dashboard.
+
+### Session Plans
+
+A Session Plan is a small YAML file that declares the tmux sessions of a development workflow. Start lazytmux with the plan name and it creates the missing sessions, then opens the dashboard:
+
+```bash
+lazytmux --plan myapp     # or: lazytmux -p myapp
+```
+
+The plan lives at `<config-dir>/lazytmux/plans/myapp.yaml`, where `<config-dir>` is the user config directory: `$XDG_CONFIG_HOME` when set, otherwise `~/.config` on Linux and `~/Library/Application Support` on macOS:
+
+```yaml
+version: 1
+name: myapp
+root: ~/projects/myapp
+
+sessions:
+  - name: web
+    command: docker compose up web
+
+  - name: worker
+    command: docker compose exec php bin/console messenger:consume async
+
+  - name: logs
+    command: docker compose logs -f web
+
+  - name: shell
+```
+
+Field rules: `version` is required (only `1` is supported), and `name` is required and must match the plan name. `root` is optional but must be an absolute path or start with `~`. A session `cwd` is optional and may be relative to `root`; `~` is expanded everywhere. Every path must exist and be a directory, the whole plan validates before anything is created, so a broken plan creates nothing and exits with an error. A session `command` is optional; leave it out for a plain shell session.
+
+Plans only create what is missing: an existing tmux session whose name matches a plan entry counts as that planned session and is never recreated, renamed, or killed by the plan. If one creation fails, the remaining sessions are still created and every failure is reported. Running the same command again is a no-op. tmux remains the source of truth, nothing is stored, and a planned session killed elsewhere stays gone until the next `--plan` run creates it again.
+
+In the dashboard, planned sessions are marked with a dim `●` before their name. They are ordinary tmux sessions, attach and fullscreen work as usual, and `n` still creates ad-hoc sessions that you can manage freely. Renaming or deleting a planned session is blocked with a log message while that plan is active.
+
+In fullscreen, a planned session with a configured command shows a framed `Command` panel at the bottom with the exact command from the plan, wrapped to at most three rows. It always shows the plan command, never what the session is currently running.
+
+Session Plans are deliberately startup metadata, not an orchestrator: no auto-restart, no ordering or dependencies, and no plan editing inside the TUI.
 
 ### Dashboard keybindings
 
@@ -138,9 +177,10 @@ The create dialog has three fields: **Name** (required), **Directory** (optional
 ## How it works
 
 ```
-cmd/lazytmux   entry point + dashboard/attach loop
+cmd/lazytmux   entry point + dashboard/attach loop + plan loading
    └── internal/gui       gocui TUI: layout, keybindings, render, preview
-        └── internal/session   stateless service (model of session operations)
+        └── internal/session   stateless service (model of session operations, plan annotation/reconcile)
+             ├── internal/plan      YAML session plans: locate, parse, validate, resolve paths
              └── internal/core/tmux   tmux command abstraction
 ```
 
@@ -153,7 +193,7 @@ The gocui and tcell forks under `third_party/` are vendored (inherited from lazy
 - The preview shows the active pane of the active window of the selected session, one pane per session.
 - Fullscreen passthrough is capture-based: full-screen TUI apps (vim, htop) redraw with noticeable lag and some special key sequences can be lossy. Use `a` (real attach) for those.
 - With `a`, attaching from inside tmux takes over the terminal as a new tmux client (tmux has one client per tty), so your original session becomes detached. Detaching from the target returns you to the dashboard on the raw terminal; run `tmux attach` after quitting to get back into your original session.
-- Mouse support is limited to wheel scrolling (the preview panel and fullscreen); no config files, no persistence, deliberately out of scope for the MVP.
+- Mouse support is limited to wheel scrolling (the preview panel and fullscreen); beyond optional Session Plan files there is no config, and no runtime state is persisted, deliberately out of scope for the MVP.
 
 ## License
 

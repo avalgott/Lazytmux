@@ -1,10 +1,14 @@
 // Package session implements lazytmux's session operations on top of the
 // tmux.Client abstraction. It is stateless: tmux itself is the source of
 // truth, so sessions created outside lazytmux are discovered automatically.
+// A service may carry an immutable Session Plan (see internal/plan) as
+// startup configuration: listed sessions are annotated with plan metadata,
+// and ApplyPlan creates missing sessions once. Nothing is persisted.
 package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,11 +20,12 @@ import (
 
 	"github.com/avalgott/Lazytmux/internal/core/shell"
 	"github.com/avalgott/Lazytmux/internal/core/tmux"
+	"github.com/avalgott/Lazytmux/internal/plan"
 )
 
 // Info is a read-only view of a tmux session for display. ID is tmux's
 // session ID, Created its creation time, and ServerPID the tmux server
-// incarnation — names, IDs, and even creation seconds can be reused after
+// incarnation, names, IDs, and even creation seconds can be reused after
 // a restart, so the full triple is the stable identity.
 type Info struct {
 	Name      string
@@ -30,6 +35,7 @@ type Info struct {
 	Path      string
 	Attached  bool
 	Windows   int
+	Plan      *plan.Session // plan entry this session matches by name; nil = ad-hoc
 }
 
 // CreateOpts configures a new tmux session.
@@ -40,7 +46,7 @@ type CreateOpts struct {
 }
 
 // Preview holds captured pane content and cursor position. PaneHeight is the
-// pane's height at capture time — for a whole-history capture it separates
+// pane's height at capture time, for a whole-history capture it separates
 // real scrollback from a snapshot that contains nothing beyond the visible
 // screen (alternate-screen panes have no saved history).
 type Preview struct {
@@ -59,19 +65,19 @@ type Provider interface {
 	Kill(ctx context.Context, name string) error
 	Rename(ctx context.Context, name, newName string) error
 	Capture(ctx context.Context, name string, width, height int) (Preview, error)
-	// CaptureScrollback captures the session's whole pane history — from
-	// tmux's oldest-history sentinel to the current bottom — in one atomic
+	// CaptureScrollback captures the session's whole pane history, from
+	// tmux's oldest-history sentinel to the current bottom, in one atomic
 	// tmux operation, with ANSI escape codes and the pane height.
 	CaptureScrollback(ctx context.Context, name string) (Preview, error)
 	// PaneInputFlags reports the active pane's input mode: alternate screen
 	// active, SGR (1006) mouse tracking enabled, and the 0-based cursor
 	// position. The GUI uses it to decide whether the wheel should go to the
 	// pane's program (which handles its own scrolling) or to lazytmux scroll
-	// mode — SGR is the only wheel encoding it emits.
+	// mode, SGR is the only wheel encoding it emits.
 	PaneInputFlags(ctx context.Context, name string) (altOn, sgrMouse bool, cursorX, cursorY int, paneID string, err error)
 	// ForwardMouseWheel sends a mouse wheel event to the pane's input
 	// stream at the given 0-based pane-relative mouse coordinates (not the
-	// pane's cursor position — SGR consumers pick the hovered widget from
+	// pane's cursor position, SGR consumers pick the hovered widget from
 	// them).
 	ForwardMouseWheel(ctx context.Context, name string, up bool, cursorX, cursorY int) error
 	// SendKeys sends tmux key names (e.g. "Enter", "Up", "C-c") to the
@@ -94,11 +100,18 @@ type Provider interface {
 // Service implements Provider using the default tmux server.
 type Service struct {
 	tmux tmux.Client
+	plan *plan.Plan
 }
 
 // NewService creates a session service backed by a tmux client.
 func NewService(tc tmux.Client) *Service {
 	return &Service{tmux: tc}
+}
+
+// NewServiceWithPlan creates a session service that annotates listed
+// sessions with the given plan and can reconcile it via ApplyPlan.
+func NewServiceWithPlan(tc tmux.Client, p *plan.Plan) *Service {
+	return &Service{tmux: tc, plan: p}
 }
 
 // List returns all sessions in the default tmux server, sorted by name.
@@ -109,14 +122,28 @@ func NewService(tc tmux.Client) *Service {
 // A missing server is mapped to an empty list rather than an error: when the
 // last session is killed the tmux server exits, and "no sessions" is the
 // state the dashboard should show (with the create hint, since n restarts
-// the server).
+// the server). tmux words this two ways: "no server running" for a server
+// that exited, and "error connecting to <socket> (No such file or
+// directory)" for one that was never started. Other connect failures, like
+// a permission-denied socket, are real errors and are returned to the
+// caller.
 func (s *Service) List(ctx context.Context) ([]Info, error) {
 	sessions, err := s.tmux.ListSessions(ctx)
 	if err != nil {
-		if strings.Contains(err.Error(), "no server running") {
+		if missingServerError(err) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	// An active plan annotates matching sessions with their plan metadata;
+	// everything else is ad-hoc. tmux stays the source of truth, the join
+	// happens fresh on every list, nothing is remembered between calls.
+	var planByName map[string]*plan.Session
+	if s.plan != nil {
+		planByName = make(map[string]*plan.Session, len(s.plan.Sessions))
+		for i := range s.plan.Sessions {
+			planByName[s.plan.Sessions[i].Name] = &s.plan.Sessions[i]
+		}
 	}
 	infos := make([]Info, len(sessions))
 	for i, sess := range sessions {
@@ -128,6 +155,7 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 			Path:      sess.Path,
 			Attached:  sess.Attached,
 			Windows:   sess.Windows,
+			Plan:      planByName[sess.Name],
 		}
 	}
 	sort.Slice(infos, func(i, j int) bool {
@@ -136,13 +164,61 @@ func (s *Service) List(ctx context.Context) ([]Info, error) {
 	return infos, nil
 }
 
+// missingServerError reports whether err is tmux saying no usable server
+// exists: "no server running" after the last session was killed, or a
+// connect failure naming a socket that does not exist (the server was never
+// started). Anything else, like a permission-denied socket, is a real
+// failure the caller must see.
+func missingServerError(err error) bool {
+	msg := err.Error()
+	if strings.Contains(msg, "no server running") {
+		return true
+	}
+	return strings.Contains(msg, "error connecting to") &&
+		strings.Contains(msg, "(No such file or directory)")
+}
+
+// ApplyPlan creates every planned session that does not already exist in
+// tmux, using the same create machinery as the GUI dialogs (the shell
+// wrapper included). Existing sessions, planned or ad-hoc, are never
+// touched: a session whose name matches a plan entry counts as that planned
+// session and is not recreated or verified. Creation is best-effort per
+// session: every missing session is attempted and all failures are collected
+// and returned together, so one broken entry does not hide failures of the
+// others, and successfully created sessions are never rolled back. A missing
+// tmux server is treated as an empty session list, so the first run with a
+// plan starts the server.
+func (s *Service) ApplyPlan(ctx context.Context) error {
+	if s.plan == nil {
+		return nil
+	}
+	existing, err := s.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list sessions for plan: %w", err)
+	}
+	have := make(map[string]struct{}, len(existing))
+	for _, info := range existing {
+		have[info.Name] = struct{}{}
+	}
+	var errs []error
+	for _, sess := range s.plan.Sessions {
+		if _, ok := have[sess.Name]; ok {
+			continue
+		}
+		if err := s.Create(ctx, CreateOpts{Name: sess.Name, Dir: sess.Cwd, Command: sess.Command}); err != nil {
+			errs = append(errs, fmt.Errorf("create planned session %q: %w", sess.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // Create starts a new detached tmux session. When opts.Command is empty the
 // session runs the user's normal shell.
 //
 // A non-empty command is wrapped in an interactive shell (the user's $SHELL
 // sources a temp script holding the command, then execs a fresh shell). This
 // keeps the shell between the command and the pane, so Ctrl+C interrupts the
-// command without killing the pane — which would otherwise close the window
+// command without killing the pane, which would otherwise close the window
 // and delete the whole session, since tmux runs the command as the pane's
 // process. The script deletes itself when the shell reads it.
 func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
@@ -191,7 +267,7 @@ func (s *Service) Create(ctx context.Context, opts CreateOpts) error {
 // rejected explicitly rather than running a silently broken command. The
 // script path is always created directly under /tmp (never os.TempDir, which
 // honors TMPDIR and could introduce spaces or metacharacters), so it is safe
-// inside the single-quoted wrapper — same trick as lazyclaude's launcher
+// inside the single-quoted wrapper, same trick as lazyclaude's launcher
 // scripts.
 func buildShellWrapper(script string) (string, map[string]string, error) {
 	shellPath := os.Getenv("SHELL")
@@ -200,7 +276,7 @@ func buildShellWrapper(script string) (string, map[string]string, error) {
 	}
 	name := filepath.Base(shellPath)
 
-	// The templates are per shell family — fish does not understand POSIX
+	// The templates are per shell family, fish does not understand POSIX
 	// ${var:-default} expansion, so each family gets its own syntax. SHELL is
 	// pinned via the session env, so the plain "$SHELL" reference is exact.
 	var relaunch string
@@ -210,9 +286,9 @@ func buildShellWrapper(script string) (string, map[string]string, error) {
 	case "fish":
 		relaunch = `exec "$SHELL" -lic 'source ` + script + `; exec "$SHELL"'`
 	case "csh", "tcsh":
-		return "", nil, fmt.Errorf("shell %q is not supported for command sessions — use an empty command or a POSIX shell", name)
+		return "", nil, fmt.Errorf("shell %q is not supported for command sessions; use an empty command or a POSIX shell", name)
 	default:
-		return "", nil, fmt.Errorf("unknown shell %q — command sessions support sh, bash, dash, ksh, zsh, and fish", name)
+		return "", nil, fmt.Errorf("unknown shell %q; command sessions support sh, bash, dash, ksh, zsh, and fish", name)
 	}
 	return relaunch, map[string]string{"SHELL": shellPath}, nil
 }
@@ -356,16 +432,11 @@ func withoutTmuxEnv(env []string) []string {
 	return out
 }
 
-// ValidateName reports whether a session name is acceptable. tmux rejects
-// names containing ':' or '.', and empty names; other errors (duplicates,
-// invalid options) surface from tmux itself on create/rename.
+// ValidateName reports whether a session name is acceptable for the
+// create/rename dialogs. The name is trimmed first (dialogs tolerate stray
+// whitespace), then checked against tmux.ValidateSessionName, the canonical
+// rule set, so names validate identically whether they come from a dialog
+// or a session plan.
 func ValidateName(name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("session name is required")
-	}
-	if strings.ContainsAny(name, ":.&|;") {
-		return fmt.Errorf("session name %q contains an invalid character", name)
-	}
-	return nil
+	return tmux.ValidateSessionName(strings.TrimSpace(name))
 }

@@ -8,10 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jesseduffield/gocui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/avalgott/Lazytmux/internal/plan"
 	"github.com/avalgott/Lazytmux/internal/session"
 )
 
@@ -249,6 +251,25 @@ func TestLayoutRendersSessions(t *testing.T) {
 	}
 }
 
+func TestRenderSessionsPlannedBullet(t *testing.T) {
+	p := &fakeProvider{infos: []session.Info{
+		{Name: "web", Plan: &plan.Session{Name: "web", Command: "docker compose up web"}},
+		{Name: "scratch"},
+		{Name: "logs", Plan: &plan.Session{Name: "logs", Command: "docker compose logs -f web"}, Attached: true},
+	}}
+	app := newTestApp(t, p)
+	app.sessions = p.infos
+
+	require.NoError(t, app.layout(app.g))
+
+	v, err := app.g.View("sessions")
+	require.NoError(t, err)
+	buf := v.Buffer()
+	assert.Contains(t, buf, "● web", "planned sessions get a leading bullet")
+	assert.Contains(t, buf, "● logs")
+	assert.NotContains(t, buf, "● scratch", "ad-hoc sessions get no bullet")
+}
+
 func TestLayoutEmptyState(t *testing.T) {
 	p := &fakeProvider{}
 	app := newTestApp(t, p)
@@ -373,7 +394,7 @@ func TestVersionViewRemovedOnShrinkToCompactLayout(t *testing.T) {
 	app.sessions = []session.Info{{Name: "devbox"}}
 	// A previous tall layout registered the version view; the terminal
 	// then shrank below the strip threshold. (The fork reports ErrUnknownView
-	// for newly created views — the repo idiom treats that as success.)
+	// for newly created views, the repo idiom treats that as success.)
 	_, err = app.g.SetView("version", 0, 3, 12, 5, 0)
 	require.True(t, err == nil || isUnknownView(err))
 
@@ -605,6 +626,237 @@ func TestDeleteDialogFlow(t *testing.T) {
 	assert.Equal(t, "logs", killed[0])
 }
 
+func TestRenameBlockedForPlannedSession(t *testing.T) {
+	p := &fakeProvider{infos: []session.Info{{Name: "web", Plan: &plan.Session{Name: "web"}}}}
+	app := newTestApp(t, p)
+	app.sessions = p.infos
+
+	require.NoError(t, app.openRenameHandler(app.g, nil))
+	assert.Equal(t, DialogNone, app.dialog, "the rename dialog must not open for a planned session")
+
+	require.NotEmpty(t, app.logs, "a message must be logged")
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "part of the active plan and cannot be renamed")
+
+	_, _, renames := p.snapshot()
+	assert.Empty(t, renames, "the rename must never reach tmux")
+}
+
+func TestDeleteBlockedForPlannedSession(t *testing.T) {
+	p := &fakeProvider{infos: []session.Info{{Name: "web", Plan: &plan.Session{Name: "web"}}}}
+	app := newTestApp(t, p)
+	app.sessions = p.infos
+
+	require.NoError(t, app.openConfirmDeleteHandler(app.g, nil))
+	assert.Equal(t, DialogNone, app.dialog, "the delete confirm must not open for a planned session")
+
+	require.NotEmpty(t, app.logs, "a message must be logged")
+	assert.Contains(t, app.logs[len(app.logs)-1].msg, "part of the active plan and cannot be deleted")
+
+	_, killed, _ := p.snapshot()
+	assert.Empty(t, killed, "the kill must never reach tmux")
+}
+
+func TestWrapCommandLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmd     string
+		width   int
+		wantLen int
+		check   func(t *testing.T, lines []string)
+	}{
+		{name: "short command is one line", cmd: "docker compose up web", width: 60, wantLen: 1, check: func(t *testing.T, lines []string) {
+			assert.Equal(t, "docker compose up web", lines[0])
+		}},
+		{name: "unbroken token caps at three lines", cmd: strings.Repeat("a", 350), width: 100, wantLen: 3, check: func(t *testing.T, lines []string) {
+			assert.Len(t, lines[0], 100)
+			assert.Len(t, lines[1], 100)
+			assert.Equal(t, 98, strings.Count(lines[2], "a"), "the last visible line truncates to width-1")
+			assert.True(t, strings.HasSuffix(lines[2], "…"), "the last visible line must end with an ellipsis")
+		}},
+		{name: "exactly three lines needs no ellipsis", cmd: strings.Repeat("a", 300), width: 100, wantLen: 3, check: func(t *testing.T, lines []string) {
+			assert.Len(t, lines[2], 100)
+			assert.False(t, strings.HasSuffix(lines[2], "…"), "nothing is cut off, so no ellipsis")
+		}},
+		{name: "embedded newline preserved", cmd: "line one\nline two", width: 60, wantLen: 2, check: func(t *testing.T, lines []string) {
+			assert.Equal(t, "line one", lines[0])
+			assert.Equal(t, "line two", lines[1])
+		}},
+		{name: "trailing newlines trimmed", cmd: "run worker\n\n", width: 60, wantLen: 1, check: func(t *testing.T, lines []string) {
+			assert.Equal(t, "run worker", lines[0])
+		}},
+		{name: "width one degenerates gracefully", cmd: "abcde", width: 1, wantLen: 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := wrapCommandLines(tt.cmd, tt.width)
+			require.Len(t, lines, tt.wantLen)
+			if tt.check != nil {
+				tt.check(t, lines)
+			}
+		})
+	}
+}
+
+// TestCommandPanelLinesReservePaddingCell guards the command panel's wrap
+// width: every row is rendered with a one-cell leading padding, and a row
+// that fills the panel's inner width would otherwise be clipped at draw time
+// (Wrap=false drops the overflowing cell).
+func TestCommandPanelLinesReservePaddingCell(t *testing.T) {
+	tests := []struct {
+		name       string
+		cmd        string
+		innerWidth int
+		check      func(t *testing.T, lines []string)
+	}{
+		{
+			name:       "full-width row keeps its last cell",
+			cmd:        strings.Repeat("a", 117) + "Z",
+			innerWidth: 118,
+			check: func(t *testing.T, lines []string) {
+				assert.Equal(t, []string{" " + strings.Repeat("a", 117), " Z"}, lines)
+			},
+		},
+		{
+			name:       "exact multiple wraps without loss",
+			cmd:        strings.Repeat("a", 236),
+			innerWidth: 118,
+			check: func(t *testing.T, lines []string) {
+				assert.Len(t, lines, 3)
+				for _, l := range lines {
+					assert.LessOrEqual(t, ansi.StringWidth(l), 118, "padded rows must fit the inner width")
+				}
+				assert.Equal(t, 236, strings.Count(strings.Join(lines, "\n"), "a"))
+			},
+		},
+		{
+			name:       "ellipsis row keeps the ellipsis",
+			cmd:        strings.Repeat("a", 400),
+			innerWidth: 118,
+			check: func(t *testing.T, lines []string) {
+				assert.Len(t, lines, 3)
+				assert.True(t, strings.HasSuffix(lines[2], "…"), "the truncated row must keep its ellipsis")
+				assert.LessOrEqual(t, ansi.StringWidth(lines[2]), 118)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := commandPanelLines(tt.cmd, tt.innerWidth)
+			tt.check(t, lines)
+		})
+	}
+}
+
+func TestFullScreenCommandPanelShown(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "web", Plan: &plan.Session{Name: "web", Cwd: "/work", Command: "docker compose up web"}}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	v, err := app.g.View("fullscreen-command")
+	require.NoError(t, err)
+	assert.True(t, v.Frame)
+	assert.Equal(t, " Command ", v.Title)
+	assert.Contains(t, v.Buffer(), "docker compose up web")
+
+	// One wrapped line → the panel spans 3 rows; main shrinks accordingly.
+	main, _ := app.g.View("main")
+	x0, y0, x1, y1 := main.Dimensions()
+	assert.Equal(t, []int{0, 0, 119, 34}, []int{x0, y0, x1, y1})
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.resizes) == 1
+	}, time.Second, 5*time.Millisecond)
+	p.mu.Lock()
+	resizes := append([]resizeCall(nil), p.resizes...)
+	p.mu.Unlock()
+	assert.Equal(t, resizeCall{name: "web", width: 118, height: 33}, resizes[0])
+}
+
+func TestFullScreenCommandPanelWrapsToThreeRows(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "web", Plan: &plan.Session{Name: "web", Command: strings.Repeat("a", 500)}}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	v, err := app.g.View("fullscreen-command")
+	require.NoError(t, err)
+	assert.Contains(t, v.Buffer(), "…", "overflowing commands end with an ellipsis")
+
+	// Three wrapped lines → a 5-row panel; main shrinks further.
+	main, _ := app.g.View("main")
+	x0, y0, x1, y1 := main.Dimensions()
+	assert.Equal(t, []int{0, 0, 119, 32}, []int{x0, y0, x1, y1})
+}
+
+func TestFullScreenCommandPanelHiddenForAdHoc(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	_, err := app.g.View("fullscreen-command")
+	assert.Error(t, err, "ad-hoc sessions get no command panel")
+	main, _ := app.g.View("main")
+	x0, y0, x1, y1 := main.Dimensions()
+	assert.Equal(t, []int{0, 0, 119, 38}, []int{x0, y0, x1, y1}, "main keeps its usual fullscreen shape")
+}
+
+func TestFullScreenCommandPanelHiddenWithoutCommand(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "shell", Plan: &plan.Session{Name: "shell"}}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	_, err := app.g.View("fullscreen-command")
+	assert.Error(t, err, "a planned session without a command gets no panel")
+}
+
+func TestFullScreenCommandPanelShownInScrollMode(t *testing.T) {
+	p := &fakeProvider{history: 50, paneHeight: 20}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "web", Plan: &plan.Session{Name: "web", Command: "docker compose up web"}}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	app.enterScrollMode()
+	assert.True(t, app.scroll.IsActive())
+	require.NoError(t, app.layout(app.g))
+
+	v, err := app.g.View("fullscreen-command")
+	require.NoError(t, err, "the panel stays in scroll mode")
+	assert.Contains(t, v.Buffer(), "docker compose up web")
+}
+
+func TestFullScreenCommandPanelCleanedUp(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "web", Plan: &plan.Session{Name: "web", Command: "docker compose up web"}}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+	_, err := app.g.View("fullscreen-command")
+	require.NoError(t, err)
+
+	require.NoError(t, app.exitFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	_, err = app.g.View("fullscreen-command")
+	assert.Error(t, err, "the panel must not linger after leaving fullscreen")
+	_, err = app.g.View("sessions")
+	assert.NoError(t, err, "the dashboard returns")
+}
+
 func TestEnterOpensFullscreenNotAttach(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox"}}
@@ -732,7 +984,7 @@ func TestApplySessionRefreshClearsStaleList(t *testing.T) {
 	app.sessions = []session.Info{{Name: "home"}}
 
 	// Killing the last session exits the tmux server, and the service maps
-	// that to an empty list — the stale entry must disappear.
+	// that to an empty list, the stale entry must disappear.
 	app.applySessionRefresh(nil, nil)
 	assert.Empty(t, app.sessions)
 	assert.Nil(t, app.currentSession())
@@ -1072,7 +1324,7 @@ func TestPreviewScrollMoveExitsAtBottom(t *testing.T) {
 	app.previewScroll.Move(1)
 	assert.Equal(t, 1, app.previewScroll.offsetFromBottom)
 
-	// previewScrollMove exits the mode when the live bottom is reached —
+	// previewScrollMove exits the mode when the live bottom is reached,
 	// dispatch through the preview-focused path (focusMain = true) so the
 	// bottom-exit, not the session-change hook, is what is exercised.
 	app.focusMain = true
@@ -1394,7 +1646,7 @@ func TestPreviewScrollZeroHistoryExitsWithStatus(t *testing.T) {
 	seq := app.previewScroll.seq
 
 	app.applyPreviewScrollLoad(seq, app.sessionGen.Load(), "", "", make([]string, 5), 5, nil)
-	// The hint applies on the event loop via g.Update (headless no-op) —
+	// The hint applies on the event loop via g.Update (headless no-op),
 	// drive the applier directly.
 	app.applyNoHistoryHint("devbox", false, false, false)
 	assert.False(t, app.previewScroll.IsActive())
@@ -1722,7 +1974,7 @@ func TestScrollSnapshotRecognizesStrippedBlankHistory(t *testing.T) {
 	p := &fakeProvider{paneHeight: 10}
 	app := newTestApp(t, p)
 	// A 10-row pane whose bottom row is always blank: two feeds accumulate
-	// exactly 10 stripped lines — one real line of history at len == paneHeight.
+	// exactly 10 stripped lines, one real line of history at len == paneHeight.
 	rows := make([]string, 9)
 	for i := range rows {
 		rows[i] = fmt.Sprintf("r%02d", i)
@@ -1987,7 +2239,7 @@ func TestSessionGenAdvancesOnRecreatedIDWithNewCreated(t *testing.T) {
 	gen := app.sessionGen.Load()
 
 	// A tmux server restart recycles session IDs: same name and ID, but the
-	// creation timestamp differs — that must still invalidate.
+	// creation timestamp differs, that must still invalidate.
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 200}}, nil)
 	assert.NotEqual(t, gen, app.sessionGen.Load(), "a recycled ID with a new creation time is a new session")
 }
@@ -2151,7 +2403,7 @@ func TestSessionGenAdvancesOnServerRestart(t *testing.T) {
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 100, ServerPID: 1111}}, nil)
 	gen := app.sessionGen.Load()
 
-	// A same-second restart recycles the ID and the creation second — only
+	// A same-second restart recycles the ID and the creation second, only
 	// the server PID distinguishes the incarnations.
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$0", Created: 100, ServerPID: 2222}}, nil)
 	assert.NotEqual(t, gen, app.sessionGen.Load(), "a server restart must invalidate even with recycled ID and same-second creation")
@@ -2364,7 +2616,7 @@ func TestUnboundBufferKeptWhenUnrelatedSessionChanges(t *testing.T) {
 	app.feedBuffer("devbox", "live-output")
 
 	// An unrelated session appears: the global generation advances, but
-	// devbox's identity did not — its buffer must survive.
+	// devbox's identity did not, its buffer must survive.
 	app.applySessionRefresh([]session.Info{{Name: "devbox", ID: "$1", Created: 100}, {Name: "other", ID: "$9"}}, nil)
 	assert.NotNil(t, app.bufferLookup("devbox"), "an unrelated session change must not drop this session's history")
 }
