@@ -104,7 +104,10 @@ func (b *LineBuffer) update(scr []string) []string {
 	// A one-row pane has no overlap to align on at all: every fresh single
 	// row is treated as the next scrolled-in line so its predecessor is
 	// retained (no redraw signal exists at this size to distinguish on).
-	if n == 1 {
+	// Only for CONSECUTIVE one-row captures — a shrink from multiple rows
+	// to one must take the normal replace path below instead of retaining
+	// the old screen as fabricated history.
+	if n == 1 && prev == 1 {
 		if scr[0] != b.lines[len(b.lines)-1] {
 			return capLines(append(b.lines, scr[0]), b.cap)
 		}

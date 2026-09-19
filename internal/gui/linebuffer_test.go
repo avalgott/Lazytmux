@@ -398,6 +398,16 @@ func TestLineBufferOneRowPaneRetainsSuccessiveLines(t *testing.T) {
 		"a one-row pane has no overlap to align on: each fresh row is the next line")
 }
 
+func TestLineBufferShrinkToOneRowReplacesOldScreen(t *testing.T) {
+	b := NewLineBuffer(100)
+	b.Feed(screen("a", "b", "c", "d", "e"))
+	// The pane shrinks to a single row: the old screen must be replaced,
+	// not retained as fabricated history.
+	b.Feed(screen("status"))
+	assert.Equal(t, []string{"status"}, b.Snapshot(),
+		"a shrink from multiple rows to one must replace the old screen")
+}
+
 func TestLineBufferOneRowPaneRepaintDoesNotDuplicate(t *testing.T) {
 	b := NewLineBuffer(100)
 	b.Feed(screen("a"))
