@@ -89,7 +89,7 @@ they're doing live, create and remove them, and jump into any of them.
   and real `tmux attach-session` support.
 - `install.sh` one-line installer and GoReleaser setup for `v*` tags.
 
-[v0.4.0]: https://github.com/avalgott/Lazytmux/compare/v0.3.0...HEAD
+[v0.4.0]: https://github.com/avalgott/Lazytmux/compare/v0.3.0...v0.4.0
 [v0.3.0]: https://github.com/avalgott/Lazytmux/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/avalgott/Lazytmux/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/avalgott/Lazytmux/releases/tag/v0.1.0
