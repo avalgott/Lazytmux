@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/jesseduffield/gocui"
 
 	"github.com/avalgott/Lazytmux/internal/gui/presentation"
@@ -180,7 +182,8 @@ func (a *App) setDashboardFocus(g *gocui.Gui) error {
 }
 
 func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
-	g.DeleteView("fullscreen-bar") // clean up after fullscreen mode
+	g.DeleteView("fullscreen-bar")     // clean up after fullscreen mode
+	g.DeleteView("fullscreen-command") // clean up after fullscreen mode
 
 	l := ComputeLayout(maxX, maxY)
 	a.clampCursor()
@@ -266,9 +269,45 @@ func (a *App) layoutMain(g *gocui.Gui, maxX, maxY int) error {
 	return nil
 }
 
+// wrapCommandLines wraps the configured command into at most 3 display rows
+// for the command panel, breaking at word boundaries at the given display
+// width (long unbroken tokens break at the width). When the command needs
+// more than 3 rows, the last visible row is truncated with an ellipsis.
+func wrapCommandLines(cmd string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	cmd = strings.TrimRight(cmd, "\n")
+	lines := strings.Split(ansi.Hardwrap(cmd, width, false), "\n")
+	if len(lines) > 3 {
+		lines = lines[:3]
+		lines[2] = ansi.Truncate(lines[2], width-1, "…")
+	}
+	return lines
+}
+
+// fullscreenPlanCommand returns the YAML-configured command of the fullscreen
+// target, or "" when the target is ad-hoc or its plan entry has no command.
+// The session list keeps refreshing every 300ms even in fullscreen, so read
+// it fresh on every layout rather than caching — the panel always shows the
+// plan command, never what the pane is currently running.
+func (a *App) fullscreenPlanCommand() string {
+	target := a.fullscreen.Target()
+	if target == "" {
+		return ""
+	}
+	for _, s := range a.sessions {
+		if s.Name == target && s.Plan != nil {
+			return s.Plan.Command
+		}
+	}
+	return ""
+}
+
 // layoutFullScreen lays out the passthrough mode: the main view fills the
 // terminal (frameless) and forwards every key to the target session's pane;
-// a status bar at the bottom shows the mode hints.
+// a status bar at the bottom shows the mode hints. A planned session with a
+// configured command additionally gets a framed Command panel above the bar.
 func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	// Remove split-panel views so only the fullscreen view remains.
 	g.DeleteView("sessions")
@@ -276,7 +315,45 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	g.DeleteView("version")
 	g.DeleteView("options")
 
-	v, err := g.SetView("main", 0, 0, maxX-1, maxY-2, 0)
+	// Command panel geometry: a framed view with N content rows spans N+2
+	// rows (the fork draws content at y0+1), and its bottom frame lands on
+	// maxY-3 — the row directly above the status bar (maxY-2..maxY) — so
+	// top = maxY-4-N. On very short terminals the panel shrinks and finally
+	// disappears rather than starve the main view.
+	cmd := a.fullscreenPlanCommand()
+	cmdTop := 0
+	if cmd != "" {
+		lines := wrapCommandLines(cmd, maxX-2)
+		rows := len(lines)
+		if maxRows := maxY - 11; rows > maxRows {
+			rows = maxRows
+		}
+		if rows >= 1 {
+			cmdTop = maxY - 4 - rows
+			vc, err := g.SetView("fullscreen-command", 0, cmdTop, maxX-1, maxY-3, 0)
+			if err != nil && !isUnknownView(err) {
+				return err
+			}
+			setRoundedFrame(vc)
+			vc.Title = " Command "
+			vc.Wrap = false
+			vc.Editable = false
+			vc.Clear()
+			for _, l := range lines[:rows] {
+				fmt.Fprintln(vc, " "+l)
+			}
+		}
+	}
+	if cmdTop == 0 {
+		// No panel this layout — a previous target's panel must not linger.
+		g.DeleteView("fullscreen-command")
+	}
+
+	mainY1 := maxY - 2
+	if cmdTop > 0 {
+		mainY1 = cmdTop - 1
+	}
+	v, err := g.SetView("main", 0, 0, maxX-1, mainY1, 0)
 	if err != nil && !isUnknownView(err) {
 		return err
 	}

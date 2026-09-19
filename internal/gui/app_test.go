@@ -655,6 +655,157 @@ func TestDeleteBlockedForPlannedSession(t *testing.T) {
 	assert.Empty(t, killed, "the kill must never reach tmux")
 }
 
+func TestWrapCommandLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		cmd     string
+		width   int
+		wantLen int
+		check   func(t *testing.T, lines []string)
+	}{
+		{name: "short command is one line", cmd: "docker compose up web", width: 60, wantLen: 1, check: func(t *testing.T, lines []string) {
+			assert.Equal(t, "docker compose up web", lines[0])
+		}},
+		{name: "unbroken token caps at three lines", cmd: strings.Repeat("a", 350), width: 100, wantLen: 3, check: func(t *testing.T, lines []string) {
+			assert.Len(t, lines[0], 100)
+			assert.Len(t, lines[1], 100)
+			assert.Equal(t, 98, strings.Count(lines[2], "a"), "the last visible line truncates to width-1")
+			assert.True(t, strings.HasSuffix(lines[2], "…"), "the last visible line must end with an ellipsis")
+		}},
+		{name: "exactly three lines needs no ellipsis", cmd: strings.Repeat("a", 300), width: 100, wantLen: 3, check: func(t *testing.T, lines []string) {
+			assert.Len(t, lines[2], 100)
+			assert.False(t, strings.HasSuffix(lines[2], "…"), "nothing is cut off, so no ellipsis")
+		}},
+		{name: "embedded newline preserved", cmd: "line one\nline two", width: 60, wantLen: 2, check: func(t *testing.T, lines []string) {
+			assert.Equal(t, "line one", lines[0])
+			assert.Equal(t, "line two", lines[1])
+		}},
+		{name: "trailing newlines trimmed", cmd: "run worker\n\n", width: 60, wantLen: 1, check: func(t *testing.T, lines []string) {
+			assert.Equal(t, "run worker", lines[0])
+		}},
+		{name: "width one degenerates gracefully", cmd: "abcde", width: 1, wantLen: 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := wrapCommandLines(tt.cmd, tt.width)
+			require.Len(t, lines, tt.wantLen)
+			if tt.check != nil {
+				tt.check(t, lines)
+			}
+		})
+	}
+}
+
+func TestFullScreenCommandPanelShown(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "web", Plan: &plan.Session{Name: "web", Cwd: "/work", Command: "docker compose up web"}}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	v, err := app.g.View("fullscreen-command")
+	require.NoError(t, err)
+	assert.True(t, v.Frame)
+	assert.Equal(t, " Command ", v.Title)
+	assert.Contains(t, v.Buffer(), "docker compose up web")
+
+	// One wrapped line → the panel spans 3 rows; main shrinks accordingly.
+	main, _ := app.g.View("main")
+	x0, y0, x1, y1 := main.Dimensions()
+	assert.Equal(t, []int{0, 0, 119, 34}, []int{x0, y0, x1, y1})
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.resizes) == 1
+	}, time.Second, 5*time.Millisecond)
+	p.mu.Lock()
+	resizes := append([]resizeCall(nil), p.resizes...)
+	p.mu.Unlock()
+	assert.Equal(t, resizeCall{name: "web", width: 118, height: 33}, resizes[0])
+}
+
+func TestFullScreenCommandPanelWrapsToThreeRows(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "web", Plan: &plan.Session{Name: "web", Command: strings.Repeat("a", 500)}}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	v, err := app.g.View("fullscreen-command")
+	require.NoError(t, err)
+	assert.Contains(t, v.Buffer(), "…", "overflowing commands end with an ellipsis")
+
+	// Three wrapped lines → a 5-row panel; main shrinks further.
+	main, _ := app.g.View("main")
+	x0, y0, x1, y1 := main.Dimensions()
+	assert.Equal(t, []int{0, 0, 119, 32}, []int{x0, y0, x1, y1})
+}
+
+func TestFullScreenCommandPanelHiddenForAdHoc(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "devbox"}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	_, err := app.g.View("fullscreen-command")
+	assert.Error(t, err, "ad-hoc sessions get no command panel")
+	main, _ := app.g.View("main")
+	x0, y0, x1, y1 := main.Dimensions()
+	assert.Equal(t, []int{0, 0, 119, 38}, []int{x0, y0, x1, y1}, "main keeps its usual fullscreen shape")
+}
+
+func TestFullScreenCommandPanelHiddenWithoutCommand(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "shell", Plan: &plan.Session{Name: "shell"}}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	_, err := app.g.View("fullscreen-command")
+	assert.Error(t, err, "a planned session without a command gets no panel")
+}
+
+func TestFullScreenCommandPanelShownInScrollMode(t *testing.T) {
+	p := &fakeProvider{history: 50, paneHeight: 20}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "web", Plan: &plan.Session{Name: "web", Command: "docker compose up web"}}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	app.enterScrollMode()
+	assert.True(t, app.scroll.IsActive())
+	require.NoError(t, app.layout(app.g))
+
+	v, err := app.g.View("fullscreen-command")
+	require.NoError(t, err, "the panel stays in scroll mode")
+	assert.Contains(t, v.Buffer(), "docker compose up web")
+}
+
+func TestFullScreenCommandPanelCleanedUp(t *testing.T) {
+	p := &fakeProvider{}
+	app := newTestApp(t, p)
+	app.sessions = []session.Info{{Name: "web", Plan: &plan.Session{Name: "web", Command: "docker compose up web"}}}
+	require.NoError(t, app.layout(app.g))
+	require.NoError(t, app.openFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+	_, err := app.g.View("fullscreen-command")
+	require.NoError(t, err)
+
+	require.NoError(t, app.exitFullScreenHandler(app.g, nil))
+	require.NoError(t, app.layout(app.g))
+
+	_, err = app.g.View("fullscreen-command")
+	assert.Error(t, err, "the panel must not linger after leaving fullscreen")
+	_, err = app.g.View("sessions")
+	assert.NoError(t, err, "the dashboard returns")
+}
+
 func TestEnterOpensFullscreenNotAttach(t *testing.T) {
 	app := newTestApp(t, &fakeProvider{})
 	app.sessions = []session.Info{{Name: "devbox"}}

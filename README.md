@@ -110,6 +110,8 @@ Plans only create what is missing: an existing tmux session whose name matches a
 
 In the dashboard, planned sessions are marked with a dim `●` before their name. They are ordinary tmux sessions — attach and fullscreen work as usual, and `n` still creates ad-hoc sessions that you can manage freely. Renaming or deleting a planned session is blocked with a log message while that plan is active.
 
+In fullscreen, a planned session with a configured command shows a framed `Command` panel at the bottom with the exact command from the plan, wrapped to at most three rows. It always shows the plan command — never what the session is currently running.
+
 Session Plans are deliberately startup metadata, not an orchestrator: no auto-restart, no ordering or dependencies, and no plan editing inside the TUI.
 
 ### Dashboard keybindings
