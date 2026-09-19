@@ -73,9 +73,10 @@ func ComputeLayout(width, height int) Layout {
 	leftH := maxY - 2 // rows available to the left-column panels
 	sessY1 := (leftH * 2) / 3
 	logsY0 := sessY1 + 1
-	// The version strip needs one content row plus its frame: three rows
-	// pinned to the bottom of the left column, right above the options bar.
-	logsY1 := maxY - 6
+	// The version strip is exactly three rows — top border (with the
+	// title), the version content, bottom border — pinned to the bottom of
+	// the left column, right above the options bar.
+	logsY1 := maxY - 5
 	// Keep the logs panel usable on very short terminals.
 	if logsY0 > logsY1-2 {
 		logsY0 = logsY1 - 2
@@ -85,7 +86,7 @@ func ComputeLayout(width, height int) Layout {
 	return Layout{
 		Sessions: Rect{X0: 0, Y0: 0, X1: splitX - 1, Y1: sessY1},
 		Logs:     Rect{X0: 0, Y0: logsY0, X1: splitX - 1, Y1: logsY1},
-		Version:  Rect{X0: 0, Y0: maxY - 5, X1: splitX - 1, Y1: maxY - 2},
+		Version:  Rect{X0: 0, Y0: maxY - 4, X1: splitX - 1, Y1: maxY - 2},
 		Main:     Rect{X0: splitX, Y0: 0, X1: maxX - 1, Y1: maxY - 2},
 		Options:  Rect{X0: 0, Y0: maxY - 2, X1: maxX - 1, Y1: maxY},
 	}
