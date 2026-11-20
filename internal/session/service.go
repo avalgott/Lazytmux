@@ -20,6 +20,7 @@ import (
 
 	"github.com/avalgott/Lazytmux/internal/core/shell"
 	"github.com/avalgott/Lazytmux/internal/core/tmux"
+	"github.com/avalgott/Lazytmux/internal/image"
 	"github.com/avalgott/Lazytmux/internal/plan"
 )
 
@@ -88,6 +89,12 @@ type Provider interface {
 	SendLiteral(ctx context.Context, name, text string) error
 	// Paste sends text to the pane as a bracketed paste.
 	Paste(ctx context.Context, name, text string) error
+
+	// PasteImageRef saves the clipboard image to a temp file and sends a
+	// reference to the pane: "@<path> " for Claude Code-like panes (the
+	// file mention attaches the image), the bare path otherwise. Returns
+	// the written file path.
+	PasteImageRef(ctx context.Context, name string, data []byte) (string, error)
 	// ResizeWindow resizes the session's current window (tmux resize-window).
 	// Used by fullscreen mode so the target pane fills the terminal.
 	ResizeWindow(ctx context.Context, name string, width, height int) error
@@ -400,6 +407,43 @@ func (s *Service) SendLiteral(ctx context.Context, name, text string) error {
 // Paste sends text to the session's active pane as a bracketed paste.
 func (s *Service) Paste(ctx context.Context, name, text string) error {
 	return s.tmux.PasteToPane(ctx, name, text)
+}
+
+// PasteImageRef saves the clipboard image to a temp file and sends a
+// reference into the pane. Claude Code-like panes (claude, node, bun) get
+// "@<path> " so the file mention attaches the image; everything else gets
+// the bare path. Only the short reference transits tmux commands, never the
+// image bytes. The temp file is deliberately not cleaned up: the pane
+// program needs it while attaching.
+func (s *Service) PasteImageRef(ctx context.Context, name string, data []byte) (string, error) {
+	ext, ok := image.SniffFormat(data)
+	if !ok {
+		return "", fmt.Errorf("clipboard data is not a PNG/JPEG/GIF/WebP image")
+	}
+	path, err := image.WriteTemp(data, ext)
+	if err != nil {
+		return "", fmt.Errorf("write clipboard image: %w", err)
+	}
+	ref := path
+	if cmd, err := s.tmux.PaneCurrentCommand(ctx, name); err == nil && isClaudeCommand(cmd) {
+		ref = "@" + path + " " // trailing space triggers the mention
+	}
+	if err := s.tmux.SendKeysLiteral(ctx, name, ref); err != nil {
+		return path, fmt.Errorf("send image reference: %w", err)
+	}
+	return path, nil
+}
+
+// isClaudeCommand reports whether a pane's foreground command looks like a
+// Claude Code session: the native binary is claude, npm installs run under
+// node, bunx installs under bun.
+func isClaudeCommand(cmd string) bool {
+	base := strings.ToLower(filepath.Base(cmd))
+	switch base {
+	case "claude", "node", "bun":
+		return true
+	}
+	return false
 }
 
 // ResizeWindow resizes the session's current window.

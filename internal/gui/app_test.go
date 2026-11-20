@@ -21,6 +21,9 @@ import (
 // by background goroutines (the dialog handlers), so access is synchronized.
 type fakeProvider struct {
 	mu               sync.Mutex
+	pasteImages      []pasteImageCall
+	pasteImagePath   string
+	pasteImageErr    error
 	infos            []session.Info
 	creates          []session.CreateOpts
 	killed           []string
@@ -186,6 +189,30 @@ func (f *fakeProvider) SendLiteral(_ context.Context, name, text string) error {
 	}
 	f.literals[name] += text
 	return f.err
+}
+
+// pasteImageCall records one PasteImageRef invocation.
+type pasteImageCall struct {
+	name string
+	data []byte
+}
+
+func (f *fakeProvider) PasteImageRef(_ context.Context, name string, data []byte) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pasteImages = append(f.pasteImages, pasteImageCall{name: name, data: append([]byte(nil), data...)})
+	return f.pasteImagePath, f.pasteImageErr
+}
+
+// pasteImageSnapshot returns copies of the recorded PasteImageRef calls.
+func (f *fakeProvider) pasteImageSnapshot() []pasteImageCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]pasteImageCall, len(f.pasteImages))
+	for i, c := range f.pasteImages {
+		out[i] = pasteImageCall{name: c.name, data: append([]byte(nil), c.data...)}
+	}
+	return out
 }
 
 func (f *fakeProvider) Paste(_ context.Context, name, text string) error {

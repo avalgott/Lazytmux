@@ -595,3 +595,96 @@ func TestServiceListCarriesSessionID(t *testing.T) {
 	require.Len(t, infos, 1)
 	assert.Equal(t, "$5", infos[0].ID, "the stable tmux session ID rides along for buffer identity")
 }
+
+func TestServicePasteImageRef(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\nfixture bytes")
+
+	tests := []struct {
+		name        string
+		paneCommand string
+		wantRef     string // expected literal sent (path placeholder checked separately)
+	}{
+		{"claude pane gets the mention", "claude", "@PATH "},
+		{"node pane gets the mention", "node", "@PATH "},
+		{"bun pane gets the mention", "bun", "@PATH "},
+		{"bash pane gets the bare path", "bash", "PATH"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := tmux.NewMockClient()
+			mock.PaneCommands["devbox"] = tt.paneCommand
+			svc := NewService(mock)
+
+			path, err := svc.PasteImageRef(context.Background(), "devbox", png)
+			require.NoError(t, err)
+			t.Cleanup(func() { os.Remove(path) })
+
+			got, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, png, got, "the temp file must hold the exact image bytes")
+			assert.Equal(t, ".png", filepath.Ext(path))
+
+			sent := mock.SentKeys["devbox"]
+			require.Len(t, sent, 1)
+			assert.Equal(t, strings.ReplaceAll(tt.wantRef, "PATH", path), sent[0])
+		})
+	}
+
+	t.Run("pane command lookup failure falls back to the bare path", func(t *testing.T) {
+		mock := tmux.NewMockClient()
+		mock.ErrPaneCurrentCommand = assert.AnError
+		svc := NewService(mock)
+
+		path, err := svc.PasteImageRef(context.Background(), "devbox", png)
+		require.NoError(t, err)
+		t.Cleanup(func() { os.Remove(path) })
+
+		sent := mock.SentKeys["devbox"]
+		require.Len(t, sent, 1)
+		assert.Equal(t, path, sent[0], "the bare path is sent when the pane command is unknown")
+	})
+}
+
+func TestServicePasteImageRefNonImage(t *testing.T) {
+	mock := tmux.NewMockClient()
+	svc := NewService(mock)
+
+	_, err := svc.PasteImageRef(context.Background(), "devbox", []byte("not an image"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a")
+	assert.Empty(t, mock.SentKeys["devbox"], "no reference may be sent for non-image data")
+}
+
+func TestServicePasteImageRefSendError(t *testing.T) {
+	mock := tmux.NewMockClient()
+	mock.ErrSendKeys = assert.AnError
+	svc := NewService(mock)
+
+	path, err := svc.PasteImageRef(context.Background(), "devbox", []byte("\x89PNG\r\n\x1a\nx"))
+	require.Error(t, err)
+	t.Cleanup(func() { os.Remove(path) })
+	assert.NotEmpty(t, path, "the written path is returned alongside the error")
+}
+
+func TestIsClaudeCommand(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"claude", true},
+		{"CLAUDE", true},
+		{"node", true},
+		{"bun", true},
+		{"/usr/bin/node", true},
+		{"/opt/claude/claude", true},
+		{"bash", false},
+		{"zsh", false},
+		{"vim", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			assert.Equal(t, tt.want, isClaudeCommand(tt.cmd))
+		})
+	}
+}
