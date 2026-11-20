@@ -208,6 +208,10 @@ type Gui struct {
 	// reaching the event loop, so the gEvents channel never overflows.
 	OnPasteContent func(text string) error
 
+	// OnClipboard is called when an OSC 52 clipboard reply is received.
+	// The data is binary-safe (may contain NUL bytes).
+	OnClipboard func(data []byte) error
+
 	ShouldHandleMouseEvent func(view *View, key Key) bool
 
 	screen         tcell.Screen
@@ -887,9 +891,29 @@ func (g *Gui) handleEvent(ev *GocuiEvent) error {
 			return g.OnPasteContent(ev.PasteText)
 		}
 		return nil
+	case eventClipboard:
+		if g.OnClipboard != nil {
+			return g.OnClipboard(ev.ClipboardData)
+		}
+		return nil
 	default:
 		return nil
 	}
+}
+
+// TtyWrite writes raw bytes to the underlying terminal, if one exists.
+// Used to send OSC 52 clipboard read requests, which have no visual
+// effect. Headless (simulation) screens report no tty.
+func (g *Gui) TtyWrite(p []byte) error {
+	if g.screen == nil {
+		return standardErrors.New("no tty available")
+	}
+	tty, ok := g.screen.Tty()
+	if !ok {
+		return standardErrors.New("no tty available")
+	}
+	_, err := tty.Write(p)
+	return err
 }
 
 func (g *Gui) onResize() {

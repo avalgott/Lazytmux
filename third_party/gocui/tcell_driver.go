@@ -176,6 +176,7 @@ type gocuiEventType uint8
 //	  beginning of a paste operation, false for the end.
 //	The 'PasteText' field is valid if 'Type' is 'eventPasteContent'.
 //	The 'Err' field is valid if 'Type' is 'eventError'.
+//	The 'ClipboardData' field is valid if 'Type' is 'eventClipboard'.
 type GocuiEvent struct {
 	Type      gocuiEventType
 	Mod       Modifier
@@ -190,6 +191,9 @@ type GocuiEvent struct {
 	Start     bool
 	N         int
 	PasteText string
+	// ClipboardData is binary-safe OSC 52 clipboard content (may contain
+	// NUL bytes); set only when Type is eventClipboard.
+	ClipboardData []byte
 }
 
 // Event types.
@@ -205,6 +209,7 @@ const (
 	eventInterrupt
 	eventError
 	eventRaw
+	eventClipboard // OSC 52 clipboard content (binary-safe)
 )
 
 const (
@@ -352,6 +357,8 @@ func (g *Gui) pollEvent() GocuiEvent {
 			Ch:   ch,
 			Mod:  Modifier(mod),
 		}
+	case *tcell.EventClipboard:
+		return GocuiEvent{Type: eventClipboard, ClipboardData: tev.Data()}
 	case *tcell.EventMouse:
 		x, y := tev.Position()
 		button := tev.Buttons()
