@@ -1,6 +1,31 @@
 # Changelog
 ---
 
+## [Unreleased] - 2026-11-20
+
+### Summary
+
+Fullscreen mode can now paste the clipboard image into a session. The
+image travels in-band over the terminal connection, so it works over
+SSH, where the clipboard lives on the local machine while tmux and
+Claude Code run on the remote host.
+
+### Added
+
+- `Ctrl+G` in fullscreen reads the clipboard image via OSC 52 from the
+  terminal (two query stages, binary-safe reply through the vendored
+  tcell and gocui forks) and falls back to `wl-paste`/`xclip`/`osascript`
+  on the host when the terminal does not answer.
+- The image is written to a temp file and a reference is typed into the
+  pane: `@<path>` for Claude Code panes (claude, node, bun), the bare
+  path otherwise.
+- `tmux PaneCurrentCommand`, the `internal/image` package (format
+  sniffing, temp files, OSC 52 query bytes, platform clipboard readers),
+  and `session.PasteImageRef`.
+- Requirements documented: tmux `allow-passthrough` for the OSC 52
+  round trip, supported terminals, and platform tool installs.
+
+---
 ## [v0.4.0] - 2026-09-19
 
 ### Summary

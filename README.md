@@ -142,8 +142,22 @@ All keystrokes are forwarded to the session's active pane. The screen is a captu
 | `Ctrl+O` | Send a literal Ctrl+D (EOF) to the pane, for exiting shells and REPLs |
 | `Ctrl+C` | Forwarded to the pane (interrupts the running program) |
 | `Ctrl+V` | Enter scroll mode (browse the pane's history) |
+| `Ctrl+G` | Paste the clipboard image into the pane (temp file + reference; Claude Code attaches it) |
 | paste | Forwarded as a bracketed paste |
 | everything else | Forwarded to the pane |
+
+Pasting images works over SSH: lazytmux asks its own terminal for the
+clipboard in-band (OSC 52), so the image travels from the local machine
+through the SSH connection and tmux to the pane. When lazytmux runs
+inside a tmux pane, the outer tmux needs `set -g allow-passthrough on`
+for the clipboard query to reach the terminal. Terminals that do not
+answer OSC 52 reads fall back to the platform clipboard tools
+(`wl-paste` under Wayland, `xclip` under X11, `osascript` on macOS) on
+the host lazytmux runs on, which works when that host is your local
+machine. The image is written to a temp file and a reference is typed
+into the pane: `@<path>` for Claude Code panes (claude, node, bun), the
+bare path otherwise. `Ctrl+G` is therefore no longer forwarded to the
+pane.
 
 ### Scroll mode
 
