@@ -72,7 +72,6 @@ var specialKeyMap = map[gocui.Key]string{
 	gocui.KeyCtrlB:      "C-b",
 	gocui.KeyCtrlE:      "C-e",
 	gocui.KeyCtrlF:      "C-f",
-	gocui.KeyCtrlG:      "C-g",
 	gocui.KeyCtrlH:      "C-h",
 	gocui.KeyCtrlJ:      "C-j",
 	gocui.KeyCtrlK:      "C-k",

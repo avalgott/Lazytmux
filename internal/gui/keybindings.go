@@ -86,6 +86,9 @@ func (a *App) setupKeybindings() error {
 	if err := a.g.SetKeybinding("main", gocui.KeyCtrlO, gocui.ModNone, a.forwardEOFHandler); err != nil {
 		return err
 	}
+	if err := a.g.SetKeybinding("main", gocui.KeyCtrlG, gocui.ModNone, a.pasteImageHandler); err != nil {
+		return err
+	}
 	if err := a.g.SetKeybinding("main", gocui.KeyCtrlC, gocui.ModNone, a.ctrlCHandler); err != nil {
 		return err
 	}

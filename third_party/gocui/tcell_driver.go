@@ -303,7 +303,11 @@ func (g *Gui) pollEvent() GocuiEvent {
 			tev = (ev).toTcellEvent()
 		}
 	} else {
-		tev = Screen.PollEvent()
+		// The instance screen, not the package-level Screen var: the poll
+		// goroutine outlives MainLoop and must not race a later NewGui
+		// reassigning the package var (headless tests create guis back to
+		// back).
+		tev = g.screen.PollEvent()
 	}
 
 	switch tev := tev.(type) {

@@ -50,7 +50,7 @@ const fullscreenStaleAfter = 100 * time.Millisecond
 type App struct {
 	g          *gocui.Gui
 	svc        session.Provider
-	version    string // the installed app version, shown in the Version panel
+	version    string         // the installed app version, shown in the Version panel
 	sessions   []session.Info // cached session list, refreshed periodically
 	cursor     int            // selected session index
 	preview    *PreviewCache
@@ -106,6 +106,18 @@ type App struct {
 	scrollHintPane  string // the pane the hint belongs to (a pane change invalidates it)
 	scrollHintMsg   string // the message shown (depends on whether scrolling inside is possible)
 	scrollHintUntil time.Time
+
+	// Clipboard image paste (Ctrl+G in fullscreen): waiting state, the
+	// fullscreen target the read belongs to, a generation counter that
+	// invalidates pending timer stages, and the per-query wait.
+	pasteImageWaiting  bool
+	pasteImageTarget   string
+	pasteImageGen      atomic.Uint64
+	pasteImageReadWait time.Duration
+
+	// barMsg is a transient fullscreen bar message (image paste status).
+	barMsg      string
+	barMsgUntil time.Time
 }
 
 // logEntry is one line in the logs panel.
@@ -147,20 +159,21 @@ func NewAppHeadless(svc session.Provider, width, height int) (*App, error) {
 
 func newApp(g *gocui.Gui, svc session.Provider, version string) (*App, error) {
 	app := &App{
-		g:                 g,
-		svc:               svc,
-		version:           version,
-		preview:           &PreviewCache{},
-		fullscreen:        &FullScreenState{},
-		scroll:            &ScrollState{},
-		previewScroll:     &ScrollState{},
-		buffers:           make(map[string]*LineBuffer),
-		bufferIDs:         make(map[string]string),
-		bufferGens:        make(map[string]uint64),
-		bufferIdentities:  make(map[string]string),
-		paneIDs:           make(map[string]string),
-		paneSeq:           make(map[string]uint64),
-		sessionIdentities: make(map[string]string),
+		g:                  g,
+		svc:                svc,
+		version:            version,
+		preview:            &PreviewCache{},
+		fullscreen:         &FullScreenState{},
+		scroll:             &ScrollState{},
+		previewScroll:      &ScrollState{},
+		buffers:            make(map[string]*LineBuffer),
+		bufferIDs:          make(map[string]string),
+		bufferGens:         make(map[string]uint64),
+		bufferIdentities:   make(map[string]string),
+		paneIDs:            make(map[string]string),
+		paneSeq:            make(map[string]uint64),
+		sessionIdentities:  make(map[string]string),
+		pasteImageReadWait: 1500 * time.Millisecond,
 	}
 
 	g.Highlight = true
@@ -173,6 +186,13 @@ func newApp(g *gocui.Gui, svc session.Provider, version string) (*App, error) {
 	// In fullscreen mode, a complete bracketed paste is forwarded to the
 	// target pane as a paste (not keystrokes) so multiline text arrives
 	// intact. The dashboard ignores pastes.
+	// OSC 52 clipboard replies arrive here (binary-safe bytes from the
+	// terminal); the paste-image flow picks them up.
+	g.OnClipboard = func(data []byte) error {
+		app.onClipboardData(data)
+		return nil
+	}
+
 	g.OnPasteContent = func(text string) error {
 		if text == "" {
 			return nil

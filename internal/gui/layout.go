@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/jesseduffield/gocui"
@@ -403,13 +404,18 @@ func (a *App) layoutFullScreen(g *gocui.Gui, maxX, maxY int) error {
 	}
 	v2.Frame = false
 	v2.Clear()
-	if a.scroll.IsActive() {
+	if time.Now().Before(a.barMsgUntil) {
+		// A transient status (image paste progress/result) replaces the
+		// hints; the logs view does not exist in fullscreen.
+		fmt.Fprint(v2, " "+presentation.Dim+a.barMsg+presentation.Reset)
+	} else if a.scroll.IsActive() {
 		fmt.Fprint(v2, a.scrollStatusText())
 	} else {
 		name := a.fullscreen.Target()
 		fmt.Fprint(v2, " "+presentation.Bold+name+presentation.Reset+"  "+
 			presentation.StyledKey("ctrl+d", "back")+"  "+
 			presentation.StyledKey("ctrl+o", "eof")+"  "+
+			presentation.StyledKey("ctrl+g", "img")+"  "+
 			presentation.StyledKey("ctrl+v", "scroll")+"  "+
 			presentation.StyledKey("ctrl+\\", "back"))
 		// The pane's program keeps its own scrollback (alternate screen):
