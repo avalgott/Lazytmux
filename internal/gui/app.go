@@ -470,6 +470,9 @@ func (a *App) enterFullScreen() {
 	a.scrollHintIdent = ""
 	a.scrollHintMsg = ""
 	a.scrollHintUntil = time.Time{}
+	// A new fullscreen target invalidates any in-flight clipboard read.
+	a.pasteImageWaiting = false
+	a.pasteImageGen.Add(1)
 	a.preview.Invalidate()
 	a.fullscreenIdent = sessionIdentity(*sess)
 	a.fullscreen.Enter(sess.Name)
@@ -484,6 +487,10 @@ func (a *App) exitFullScreen() {
 	a.fullscreen.Exit()
 	a.fullscreenNoScrollback = false
 	a.fullscreenIdent = ""
+	// An in-flight clipboard image read must not inject into a session the
+	// user left: bump the generation and drop the waiting state.
+	a.pasteImageWaiting = false
+	a.pasteImageGen.Add(1)
 	a.preview.Invalidate()
 }
 

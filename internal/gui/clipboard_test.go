@@ -192,3 +192,37 @@ func TestFullscreenBarShowsPasteImageHint(t *testing.T) {
 	require.Contains(t, v.Buffer(), "transient status")
 	require.NotContains(t, v.Buffer(), "img", "the transient message replaces the hints")
 }
+
+// TestFullscreenPasteImageAbortedByExit verifies that leaving fullscreen
+// while the fallback is still in flight cancels the flow: the reference
+// must never be typed into a session the user is no longer looking at.
+func TestFullscreenPasteImageAbortedByExit(t *testing.T) {
+	dir := t.TempDir()
+	fixture := filepath.Join(t.TempDir(), "img.png")
+	require.NoError(t, os.WriteFile(fixture, pngClipboard, 0o644))
+	// A slow clipboard tool widens the window between the fallback firing
+	// and its result landing, so the exit deterministically happens first.
+	stub := filepath.Join(dir, "wl-paste")
+	require.NoError(t, os.WriteFile(stub, []byte("#!/bin/sh\n/bin/sleep 0.5\n/bin/cat '"+fixture+"'\n"), 0o755))
+	t.Setenv("PATH", dir)
+	t.Setenv("WAYLAND_DISPLAY", "wayland-0")
+
+	p := &fakeProvider{}
+	app := fullscreenApp(t, p)
+	app.pasteImageReadWait = 20 * time.Millisecond
+	quit := runMainLoop(t, app)
+	defer quit()
+
+	sim, ok := gocui.Screen.(tcell.SimulationScreen)
+	require.True(t, ok)
+	sim.InjectKey(tcell.KeyCtrlG, 0, tcell.ModNone)
+
+	// Both OSC stages time out (no clipboard reply); the slow fallback is
+	// now running. Leaving fullscreen must abort the injection.
+	time.Sleep(300 * time.Millisecond)
+	app.exitFullScreen()
+	time.Sleep(800 * time.Millisecond)
+
+	require.Empty(t, p.pasteImageSnapshot(), "an aborted paste must never inject into the session")
+	require.False(t, app.pasteImageWaiting)
+}

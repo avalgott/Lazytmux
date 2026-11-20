@@ -99,18 +99,21 @@ func (a *App) runPlatformImageFallback(gen uint64) {
 }
 
 // completePasteImage writes the image file and injects the reference into
-// the pane. The svc call runs off the event loop; the injection is guarded
-// against the user leaving fullscreen or switching sessions mid-flight.
+// the pane. Both callers run on the event loop, so the guard below decides
+// the injection BEFORE the send: leaving fullscreen, switching sessions, or
+// entering scroll mode cancels the flow, and nothing is ever typed into a
+// pane the user is no longer looking at. The svc call itself runs off the
+// event loop; the result closure only reports.
 func (a *App) completePasteImage(gen uint64, data []byte) {
 	target := a.pasteImageTarget
+	if !a.guardPasteImageInjection(gen, target) {
+		return
+	}
 	go func() {
 		path, err := a.svc.PasteImageRef(context.Background(), target, data)
 		a.g.Update(func(*gocui.Gui) error {
 			if a.pasteImageGen.Load() != gen {
 				return nil
-			}
-			if !a.fullscreen.IsActive() || a.fullscreen.Target() != target || a.scroll.IsActive() {
-				return nil // the session changed while the image was in flight
 			}
 			if err != nil {
 				a.setError(err.Error())
@@ -123,6 +126,20 @@ func (a *App) completePasteImage(gen uint64, data []byte) {
 			return nil
 		})
 	}()
+}
+
+// guardPasteImageInjection reports whether the flow may still inject into
+// the pane. Event-loop only: the decision and the send must be as close as
+// possible, so the injection is decided here, not after a slow platform
+// read completes on a stale fullscreen target.
+func (a *App) guardPasteImageInjection(gen uint64, target string) bool {
+	if a.pasteImageGen.Load() != gen {
+		return false
+	}
+	if !a.fullscreen.IsActive() || a.fullscreen.Target() != target || a.scroll.IsActive() {
+		return false
+	}
+	return true
 }
 
 // showBarMsg sets a transient fullscreen bar message (the logs view does
