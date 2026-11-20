@@ -177,6 +177,7 @@ func TestMockClient_ErrorInjection(t *testing.T) {
 		{"CapturePaneContent", func(m *tmux.MockClient) { m.ErrCapture = testErr }, func(m *tmux.MockClient) error { _, e := m.CapturePaneContent(ctx, "x"); return e }},
 		{"ListPanes", func(m *tmux.MockClient) { m.ErrListPanes = testErr }, func(m *tmux.MockClient) error { _, e := m.ListPanes(ctx, ""); return e }},
 		{"ShowMessage", func(m *tmux.MockClient) { m.ErrShowMessage = testErr }, func(m *tmux.MockClient) error { _, e := m.ShowMessage(ctx, "x", "fmt"); return e }},
+		{"PaneCurrentCommand", func(m *tmux.MockClient) { m.ErrPaneCurrentCommand = testErr }, func(m *tmux.MockClient) error { _, e := m.PaneCurrentCommand(ctx, "x"); return e }},
 		{"GetOption", func(m *tmux.MockClient) { m.ErrGetOption = testErr }, func(m *tmux.MockClient) error { _, e := m.GetOption(ctx, "x", "opt"); return e }},
 	}
 
@@ -189,6 +190,20 @@ func TestMockClient_ErrorInjection(t *testing.T) {
 			assert.ErrorIs(t, err, testErr)
 		})
 	}
+}
+
+func TestMockClient_PaneCurrentCommand(t *testing.T) {
+	m := tmux.NewMockClient()
+	m.PaneCommands["devbox"] = "claude"
+
+	got, err := m.PaneCurrentCommand(context.Background(), "devbox")
+	assert.NoError(t, err)
+	assert.Equal(t, "claude", got)
+
+	_, err = m.PaneCurrentCommand(context.Background(), "other")
+	assert.NoError(t, err, "an unknown target returns its zero value")
+
+	assert.Equal(t, []string{"devbox", "other"}, m.PaneCommandCalls)
 }
 
 func TestMockClient_SendKeysLiteral(t *testing.T) {

@@ -88,6 +88,10 @@ type Client interface {
 	// ShowMessage executes display-message with a format string and returns the result.
 	ShowMessage(ctx context.Context, target, format string) (string, error)
 
+	// PaneCurrentCommand returns the foreground command of the target's
+	// active pane (the basename of its executable).
+	PaneCurrentCommand(ctx context.Context, target string) (string, error)
+
 	// GetOption returns the value of a tmux option.
 	GetOption(ctx context.Context, target, option string) (string, error)
 

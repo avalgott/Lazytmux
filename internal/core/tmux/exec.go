@@ -577,6 +577,10 @@ func (c *ExecClient) PasteToPane(ctx context.Context, target string, text string
 	return nil
 }
 
+func (c *ExecClient) PaneCurrentCommand(ctx context.Context, target string) (string, error) {
+	return c.run(ctx, "display-message", "-t", target, "-p", "#{pane_current_command}")
+}
+
 func (c *ExecClient) ShowMessage(ctx context.Context, target, format string) (string, error) {
 	args := []string{"display-message", "-t", target, "-p", format}
 	return c.run(ctx, args...)

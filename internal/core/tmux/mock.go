@@ -24,9 +24,13 @@ type MockClient struct {
 	SentKeys      map[string][]string
 	Options       map[string]string
 	Messages      map[string]string
-	PaneHeight    int          // returned by CapturePaneANSIHistory
-	PaneID        string       // returned by CapturePaneANSIWithCursor
-	WheelEvents   []WheelEvent // recorded SendMouseWheel calls
+	// PaneCommands answers PaneCurrentCommand per target; PaneCommandCalls
+	// records every call in order.
+	PaneCommands     map[string]string
+	PaneCommandCalls []string
+	PaneHeight       int          // returned by CapturePaneANSIHistory
+	PaneID           string       // returned by CapturePaneANSIWithCursor
+	WheelEvents      []WheelEvent // recorded SendMouseWheel calls
 
 	// Infos are the tmux sessions returned by ListSessions (name -> info).
 	Infos map[string]SessionInfo
@@ -43,21 +47,22 @@ type MockClient struct {
 	NewSessionErrs map[string]error
 
 	// Error injection
-	ErrListClients   error
-	ErrListSessions  error
-	ErrHasSession    error
-	ErrNewSession    error
-	ErrKillSession   error
-	ErrRenameSession error
-	ErrListWindows   error
-	ErrNewWindow     error
-	ErrRespawnPane   error
-	ErrKillWindow    error
-	ErrListPanes     error
-	ErrCapture       error
-	ErrSendKeys      error
-	ErrShowMessage   error
-	ErrGetOption     error
+	ErrListClients        error
+	ErrListSessions       error
+	ErrHasSession         error
+	ErrNewSession         error
+	ErrKillSession        error
+	ErrRenameSession      error
+	ErrListWindows        error
+	ErrNewWindow          error
+	ErrRespawnPane        error
+	ErrKillWindow         error
+	ErrListPanes          error
+	ErrCapture            error
+	ErrSendKeys           error
+	ErrShowMessage        error
+	ErrPaneCurrentCommand error
+	ErrGetOption          error
 }
 
 // NewMockClient creates a MockClient with initialized maps.
@@ -70,6 +75,7 @@ func NewMockClient() *MockClient {
 		SentKeys:      make(map[string][]string),
 		Options:       make(map[string]string),
 		Messages:      make(map[string]string),
+		PaneCommands:  make(map[string]string),
 		Infos:         make(map[string]SessionInfo),
 	}
 }
@@ -294,6 +300,14 @@ func (m *MockClient) PasteToPane(_ context.Context, target string, text string) 
 	}
 	m.SentKeys[target] = append(m.SentKeys[target], text)
 	return nil
+}
+
+func (m *MockClient) PaneCurrentCommand(_ context.Context, target string) (string, error) {
+	if m.ErrPaneCurrentCommand != nil {
+		return "", m.ErrPaneCurrentCommand
+	}
+	m.PaneCommandCalls = append(m.PaneCommandCalls, target)
+	return m.PaneCommands[target], nil
 }
 
 func (m *MockClient) ShowMessage(_ context.Context, target, _ string) (string, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -358,4 +359,32 @@ func TestParseSessionsWithServerPID(t *testing.T) {
 		Name: "logs", ID: "$1", Path: "/var/log", Attached: false, Windows: 1,
 		Created: 1789573550, ServerPID: 1849982,
 	}, sessions[1])
+}
+
+func TestExecClientPaneCurrentCommand(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "fake-tmux")
+	// Record the argv and answer like tmux's display-message -p would.
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + filepath.Join(dir, "args") + "\necho claude\n"
+	require.NoError(t, os.WriteFile(fake, []byte(script), 0o755))
+
+	c := &ExecClient{tmuxBin: fake}
+	cmd, err := c.PaneCurrentCommand(context.Background(), "devbox")
+	require.NoError(t, err)
+	assert.Equal(t, "claude", cmd)
+
+	raw, err := os.ReadFile(filepath.Join(dir, "args"))
+	require.NoError(t, err)
+	args := strings.Fields(string(raw))
+	assert.Equal(t, []string{"-u", "display-message", "-t", "devbox", "-p", "#{pane_current_command}"}, args)
+}
+
+func TestExecClientPaneCurrentCommandError(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "fake-tmux")
+	require.NoError(t, os.WriteFile(fake, []byte("#!/bin/sh\necho boom >&2\nexit 1\n"), 0o755))
+
+	c := &ExecClient{tmuxBin: fake}
+	_, err := c.PaneCurrentCommand(context.Background(), "devbox")
+	require.Error(t, err)
 }
