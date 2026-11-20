@@ -7,3 +7,4 @@ integration.test
 docs/
 AGENTS.md
 CLAUDE.md
+.claude/
